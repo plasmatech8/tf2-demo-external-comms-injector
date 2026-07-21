@@ -1,0 +1,40 @@
+[package]
+name = "tf2-demo-comms-injector"
+version = "0.1.0"
+edition = "2021"
+description = "Inject external audio into TF2 demo files as Steam voice chat"
+license = "MIT"
+rust-version = "1.75.0"
+default-run = "inject-comms"
+
+[lib]
+name = "tf2_demo_comms_injector"
+path = "src/lib.rs"
+
+[[bin]]
+name = "inject-comms"
+path = "src/bin/inject_comms.rs"
+
+[[bin]]
+name = "inspect-demo"
+path = "src/bin/inspect_demo.rs"
+
+[[bin]]
+name = "extract-voice"
+path = "src/bin/extract_voice.rs"
+
+[dependencies]
+anyhow = "1.0"
+bitbuffer = "0.11"
+clap = { version = "=4.5.23", features = ["derive"] }
+hound = "3.5"
+opus = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+steam-audio-codec = "0.1.1"
+# crates.io 0.6.4 lacks the `write` feature; pin a vendored upstream snapshot.
+tf-demo-parser = { path = "vendor/tf-demo-parser", features = ["write"] }
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3.14"

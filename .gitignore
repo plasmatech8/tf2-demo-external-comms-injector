@@ -1,0 +1,17 @@
+/target/
+**/*.rs.bk
+.idea/
+.vscode/
+
+# Large demo binaries (fetch via scripts/fetch_sample_demo.sh)
+samples/*.dem
+samples/e2e_*.json
+samples/e2e_*.wav
+samples/extracted_*.wav
+samples/injected*.dem
+
+# Local research clones
+/research/
+/tmp/
+vendor/tf-demo-parser/.forgejo/
+vendor/tf-demo-parser/examples/
