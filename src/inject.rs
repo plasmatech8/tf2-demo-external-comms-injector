@@ -9,14 +9,14 @@ use serde::Serialize;
 use tf_demo_parser::demo::data::DemoTick;
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::message::voice::VoiceDataMessage;
-use tf_demo_parser::demo::message::Message;
+use tf_demo_parser::demo::message::{Message, MessageType};
 use tf_demo_parser::demo::packet::stringtable::StringTablePacket;
 use tf_demo_parser::demo::packet::{Packet, PacketType};
 use tf_demo_parser::demo::parser::{DemoHandler, Encode, NullHandler, RawPacketStream};
-use tf_demo_parser::{Demo, MessageType};
+use tf_demo_parser::Demo;
 
 use crate::audio::{load_mono_pcm, Loudness};
-use crate::steam_voice::{SteamVoiceEncoder, DEFAULT_SAMPLE_RATE};
+use crate::steam_voice::{SteamVoiceEncoder, DEFAULT_BITRATE, DEFAULT_SAMPLE_RATE};
 use crate::steamid::parse_steam_id;
 
 #[derive(Debug, Clone, Serialize)]
@@ -64,6 +64,8 @@ pub struct InjectOptions {
     /// Explicit client index (0-based slot) override.
     pub client_index: Option<u8>,
     pub sample_rate: u32,
+    /// Opus bitrate in bits/sec (default 64000). Use -1 for max.
+    pub bitrate: i32,
     /// If true, replace existing voice for the chosen client in the injection window.
     pub replace_existing: bool,
 }
@@ -261,7 +263,12 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
     };
 
     let pcm = load_mono_pcm(&opts.audio_path, opts.sample_rate, opts.loudness)?;
-    let mut encoder = SteamVoiceEncoder::new(steam_id64, opts.sample_rate)?;
+    let bitrate = if opts.bitrate == 0 {
+        DEFAULT_BITRATE
+    } else {
+        opts.bitrate
+    };
+    let mut encoder = SteamVoiceEncoder::with_bitrate(steam_id64, opts.sample_rate, bitrate)?;
     let voice_packets = encoder.encode_pcm(&pcm)?;
     if voice_packets.is_empty() {
         bail!("no voice frames produced from audio");
@@ -282,96 +289,121 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
         })
         .collect();
 
-    // Keep owned packet bytes alive for Stream borrows during encode.
-    // Strategy: rewrite demo in one pass; when we hit a Message/Signon packet whose tick
-    // is >= next scheduled voice tick, append pending voice messages whose tick <= packet.tick.
+    // Surgical rewrite: keep original packet bytes intact. For Message packets that need
+    // voice, copy the packet prefix + existing net-message bits and append VoiceData,
+    // without re-encoding PacketEntities (full re-encode makes TF2 refuse playdemo).
     let file = std::fs::read(&opts.demo_path)?;
     let demo = Demo::new(&file);
     let mut stream = demo.get_stream();
     let header = Header::read(&mut stream)?;
+    let header_end_bits = stream.pos();
+    if header_end_bits % 8 != 0 {
+        bail!("demo header is not byte-aligned");
+    }
     let mut packets = RawPacketStream::new(stream);
 
     let mut out_buffer: Vec<u8> = Vec::with_capacity(file.len() + schedule.len() * 128);
-    {
-        let mut out_stream = bitbuffer::BitWriteStream::new(&mut out_buffer, LittleEndian);
-        header.write(&mut out_stream)?;
+    out_buffer.extend_from_slice(&file[..header_end_bits / 8]);
 
-        let mut handler = DemoHandler::parse_all_with_analyser(NullHandler);
-        let mut encode_handler = DemoHandler::parse_all_with_analyser(NullHandler);
-        let mut sched_idx = 0usize;
+    let mut handler = DemoHandler::parse_all_with_analyser(NullHandler);
+    let mut encode_handler = DemoHandler::parse_all_with_analyser(NullHandler);
+    let mut sched_idx = 0usize;
 
-        let end_tick = schedule.last().map(|(t, _)| *t).unwrap_or(start_tick);
-        let mut has_stop = false;
-        let mut last_tick = DemoTick::from(0u32);
+    let end_tick = schedule.last().map(|(t, _)| *t).unwrap_or(start_tick);
+    let mut has_stop = false;
+    let mut last_tick = DemoTick::from(0u32);
 
-        while let Some(packet) = packets.next(&handler.state_handler)? {
-            last_tick = packet.tick();
-            if packet.packet_type() == PacketType::Stop {
-                has_stop = true;
-            }
+    loop {
+        let packet_start_bits = packets.pos();
+        let Some(packet) = packets.next(&handler.state_handler)? else {
+            break;
+        };
+        let packet_end_bits = packets.pos();
+        if packet_start_bits % 8 != 0 || packet_end_bits % 8 != 0 {
+            bail!(
+                "demo packet not byte-aligned ({}..{} bits)",
+                packet_start_bits,
+                packet_end_bits
+            );
+        }
+        let packet_start = packet_start_bits / 8;
+        let packet_end = packet_end_bits / 8;
 
-            let mut encode_packet = packet.clone();
-
-            // Ensure VoiceInit exists / is steam if we can patch an existing one.
-            if matches!(
-                encode_packet.packet_type(),
-                PacketType::Signon | PacketType::Message
-            ) {
-                if let Packet::Signon(msg) | Packet::Message(msg) = &mut encode_packet {
-                    for m in msg.messages.iter_mut() {
-                        if let Message::VoiceInit(init) = m {
-                            if init.codec != "steam" {
-                                init.codec = "steam".into();
-                                init.quality = 255;
-                                init.sampling_rate = opts.sample_rate as u16;
-                            }
-                        }
-                    }
-
-                    let pkt_tick: u32 = msg.tick.into();
-                    if opts.replace_existing && pkt_tick >= start_tick && pkt_tick <= end_tick {
-                        msg.messages.retain(|m| match m {
-                            Message::VoiceData(v) => v.client != player.client_index,
-                            _ => true,
-                        });
-                    }
-
-                    // Flush all scheduled frames with tick <= this packet tick
-                    while sched_idx < schedule.len() && schedule[sched_idx].0 <= pkt_tick {
-                        let frame = schedule[sched_idx].1.clone();
-                        let bit_len = (frame.len() * 8) as u16;
-                        let data = BitReadStream::new(BitReadBuffer::new_owned(frame, LittleEndian));
-                        msg.messages.push(Message::VoiceData(VoiceDataMessage {
-                            client: player.client_index,
-                            proximity: 0,
-                            length: bit_len,
-                            data,
-                        }));
-                        sched_idx += 1;
-                    }
-                }
-            }
-
-            encode_packet.encode(&mut out_stream, &encode_handler.state_handler)?;
-            handler.handle_packet(packet)?;
-            encode_handler.handle_packet(encode_packet)?;
+        last_tick = packet.tick();
+        if packet.packet_type() == PacketType::Stop {
+            has_stop = true;
         }
 
-        if sched_idx < schedule.len() {
+        // Collect voice frames that belong in this Message packet (if any).
+        let mut frames_for_packet: Vec<Vec<u8>> = Vec::new();
+        let mut strip_existing = false;
+        if let Packet::Message(msg) = &packet {
+            let pkt_tick: u32 = msg.tick.into();
+            strip_existing =
+                opts.replace_existing && pkt_tick >= start_tick && pkt_tick <= end_tick;
+            while sched_idx < schedule.len() && schedule[sched_idx].0 <= pkt_tick {
+                frames_for_packet.push(schedule[sched_idx].1.clone());
+                sched_idx += 1;
+            }
+        }
+
+        let needs_voice_init_patch = match &packet {
+            Packet::Signon(msg) | Packet::Message(msg) => msg.messages.iter().any(|m| {
+                matches!(m, Message::VoiceInit(init) if init.codec != "steam")
+            }),
+            _ => false,
+        };
+
+        if needs_voice_init_patch {
             bail!(
-                "demo ended before all voice frames could be placed ({} remaining). \
-                 Try an earlier --offset",
-                schedule.len() - sched_idx
+                "demo VoiceInit is not 'steam'; rewriting it requires a Signon/Message \
+                 rebuild that TF2 often rejects. Re-record/export with sv_voicecodec steam."
             );
         }
 
-        if !has_stop {
-            Packet::Stop(tf_demo_parser::demo::packet::stop::StopPacket { tick: last_tick })
-                .encode(&mut out_stream, &encode_handler.state_handler)?;
+        if matches!(packet.packet_type(), PacketType::Message)
+            && (!frames_for_packet.is_empty() || strip_existing)
+        {
+            let rewritten = rewrite_message_packet_append_voice(
+                &file[packet_start..packet_end],
+                &frames_for_packet,
+                player.client_index,
+                strip_existing,
+                &encode_handler.state_handler,
+            )?;
+            out_buffer.extend_from_slice(&rewritten);
+        } else {
+            out_buffer.extend_from_slice(&file[packet_start..packet_end]);
         }
+
+        // Keep parser state in sync for subsequent packets (sendtables, etc.).
+        let encode_packet = packet.clone();
+        handler.handle_packet(packet)?;
+        encode_handler.handle_packet(encode_packet)?;
     }
 
-    // Re-count injected from schedule length (reliable)
+    if sched_idx < schedule.len() {
+        bail!(
+            "demo ended before all voice frames could be placed ({} remaining). \
+             Try an earlier --offset",
+            schedule.len() - sched_idx
+        );
+    }
+
+    if !has_stop {
+        let mut encoded = Vec::new();
+        {
+            let mut out_stream = bitbuffer::BitWriteStream::new(&mut encoded, LittleEndian);
+            Packet::Stop(tf_demo_parser::demo::packet::stop::StopPacket { tick: last_tick })
+                .encode(&mut out_stream, &encode_handler.state_handler)?;
+            out_stream.align();
+        }
+        out_buffer.extend_from_slice(&encoded);
+    }
+
+    // Original header.signon is preserved (we never rewrite the signon region).
+    let _ = header;
+
     let packets_injected = schedule.len();
     std::fs::write(&opts.output_path, &out_buffer)
         .with_context(|| format!("write {}", opts.output_path.display()))?;
@@ -383,6 +415,83 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
         packets_injected,
         voice_init: report.voice_init,
     })
+}
+
+/// Copy a raw `dem_packet` (Message) and append Steam voice messages to its payload.
+///
+/// Packet layout: type(u8) + tick(i32) + meta(84) + size(u32) + size bytes of bitpacked net messages.
+fn rewrite_message_packet_append_voice(
+    raw_packet: &[u8],
+    voice_frames: &[Vec<u8>],
+    client_index: u8,
+    strip_existing_for_client: bool,
+    state: &tf_demo_parser::ParserState,
+) -> Result<Vec<u8>> {
+    const PREFIX: usize = 1 + 4 + 84; // type + tick + MessagePacketMeta
+    if raw_packet.len() < PREFIX + 4 {
+        bail!("message packet too short ({})", raw_packet.len());
+    }
+    if raw_packet[0] != PacketType::Message as u8 {
+        bail!("expected Message packet type 2, got {}", raw_packet[0]);
+    }
+
+    let old_len = u32::from_le_bytes(raw_packet[PREFIX..PREFIX + 4].try_into().unwrap()) as usize;
+    let data_off = PREFIX + 4;
+    if data_off + old_len > raw_packet.len() {
+        bail!(
+            "message packet length {old_len} exceeds packet size {}",
+            raw_packet.len()
+        );
+    }
+    let old_data = &raw_packet[data_off..data_off + old_len];
+
+    let mut new_data: Vec<u8> = Vec::with_capacity(old_len + voice_frames.len() * 64);
+    {
+        let mut writer = bitbuffer::BitWriteStream::new(&mut new_data, LittleEndian);
+        let mut reader =
+            BitReadStream::new(BitReadBuffer::new(old_data, LittleEndian));
+
+        // Copy existing net messages bit-for-bit (optionally dropping this client's voice).
+        while reader.bits_left() > 6 {
+            let msg_start = reader.pos();
+            let msg_type = MessageType::read(&mut reader)?;
+            if strip_existing_for_client && msg_type == MessageType::VoiceData {
+                let voice = VoiceDataMessage::read(&mut reader)?;
+                if voice.client == client_index {
+                    continue;
+                }
+            } else {
+                Message::skip_type(msg_type, &mut reader, state)?;
+            }
+            let msg_end = reader.pos();
+            let mut copy_reader =
+                BitReadStream::new(BitReadBuffer::new(old_data, LittleEndian));
+            copy_reader.set_pos(msg_start)?;
+            let bits = copy_reader.read_bits(msg_end - msg_start)?;
+            writer.write_bits(&bits)?;
+        }
+
+        for frame in voice_frames {
+            let bit_len = (frame.len() * 8) as u16;
+            let data = BitReadStream::new(BitReadBuffer::new(frame, LittleEndian));
+            MessageType::VoiceData.write(&mut writer)?;
+            VoiceDataMessage {
+                client: client_index,
+                proximity: 0,
+                length: bit_len,
+                data,
+            }
+            .write(&mut writer)?;
+        }
+
+        writer.align();
+    }
+
+    let mut out = Vec::with_capacity(PREFIX + 4 + new_data.len());
+    out.extend_from_slice(&raw_packet[..PREFIX]);
+    out.extend_from_slice(&(new_data.len() as u32).to_le_bytes());
+    out.extend_from_slice(&new_data);
+    Ok(out)
 }
 
 /// Extract all Steam voice payloads from a demo into a mono WAV (mixed).

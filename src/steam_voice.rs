@@ -14,6 +14,8 @@ use thiserror::Error;
 
 /// Default sample rate used by TF2 Steam voice dumps / Valve's opus voice test.
 pub const DEFAULT_SAMPLE_RATE: u32 = 24_000;
+/// Offline demos are not bandwidth-bound; prefer clearer speech than live voice defaults.
+pub const DEFAULT_BITRATE: i32 = 64_000;
 /// 20 ms frames at 24 kHz.
 pub const FRAME_SAMPLES: usize = 480;
 
@@ -23,6 +25,8 @@ pub enum SteamVoiceError {
     Opus(#[from] opus::Error),
     #[error("frame too large for u16 length field ({0} bytes)")]
     FrameTooLarge(usize),
+    #[error("invalid opus bitrate {0} (use 6000..=510000, or -1 for max / -1000 for auto)")]
+    InvalidBitrate(i32),
 }
 
 /// CRC32 matching Steam voice / demostf `crc32b` (IEEE, reflected).
@@ -49,10 +53,25 @@ pub struct SteamVoiceEncoder {
 
 impl SteamVoiceEncoder {
     pub fn new(steam_id: u64, sample_rate: u32) -> Result<Self, SteamVoiceError> {
+        Self::with_bitrate(steam_id, sample_rate, DEFAULT_BITRATE)
+    }
+
+    pub fn with_bitrate(
+        steam_id: u64,
+        sample_rate: u32,
+        bitrate: i32,
+    ) -> Result<Self, SteamVoiceError> {
         let mut encoder = Encoder::new(sample_rate, Channels::Mono, Application::Voip)?;
-        // ~22 kbps is in the ballpark of in-game voice; keep quality usable for comms.
-        encoder.set_bitrate(Bitrate::Bits(24_000))?;
+        let opus_bitrate = match bitrate {
+            -1000 => Bitrate::Auto,
+            -1 => Bitrate::Max,
+            b if (6_000..=510_000).contains(&b) => Bitrate::Bits(b),
+            other => return Err(SteamVoiceError::InvalidBitrate(other)),
+        };
+        encoder.set_bitrate(opus_bitrate)?;
         encoder.set_vbr(true)?;
+        // Max effort — encode is offline; size/CPU are fine for demo injection.
+        encoder.set_complexity(10)?;
         Ok(Self {
             encoder,
             sample_rate,

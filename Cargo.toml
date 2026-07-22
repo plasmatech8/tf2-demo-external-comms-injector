@@ -23,6 +23,10 @@ path = "src/bin/inspect_demo.rs"
 name = "extract-voice"
 path = "src/bin/extract_voice.rs"
 
+[[bin]]
+name = "dump-events"
+path = "src/bin/dump_events.rs"
+
 [dependencies]
 anyhow = "1.0"
 bitbuffer = "0.11"

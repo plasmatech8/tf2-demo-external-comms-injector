@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 use tf2_demo_comms_injector::inject::{inject_comms, InjectOptions};
-use tf2_demo_comms_injector::{Loudness, DEFAULT_SAMPLE_RATE};
+use tf2_demo_comms_injector::{Loudness, DEFAULT_BITRATE, DEFAULT_SAMPLE_RATE};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -39,6 +39,9 @@ struct Args {
     /// Opus/Steam voice sample rate
     #[arg(long, default_value_t = DEFAULT_SAMPLE_RATE)]
     sample_rate: u32,
+    /// Opus bitrate in bits/sec (default 64000). Higher = clearer; -1 = max.
+    #[arg(long, default_value_t = DEFAULT_BITRATE)]
+    bitrate: i32,
     /// Remove existing voice for the chosen client during the injection window
     #[arg(long, default_value_t = false)]
     replace_existing: bool,
@@ -62,6 +65,7 @@ fn main() -> Result<()> {
         steam_id: args.steam_id,
         client_index: args.client_index,
         sample_rate: args.sample_rate,
+        bitrate: args.bitrate,
         replace_existing: args.replace_existing,
     })?;
 

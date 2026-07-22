@@ -2,6 +2,7 @@
 **/*.rs.bk
 .idea/
 .vscode/
+.tools/
 
 # Large demo binaries (fetch via scripts/fetch_sample_demo.sh)
 samples/*.dem
