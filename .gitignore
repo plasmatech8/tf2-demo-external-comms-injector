@@ -13,5 +13,10 @@ samples/injected*.dem
 # Local research clones
 /research/
 /tmp/
+
+# Manual-test demos / audio / video (keep README tracked)
+/scratch/**
+!/scratch/README.md
+
 vendor/tf-demo-parser/.forgejo/
 vendor/tf-demo-parser/examples/
