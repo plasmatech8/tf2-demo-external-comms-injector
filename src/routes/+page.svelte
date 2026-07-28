@@ -171,161 +171,149 @@
 				External Comms Audio Injection Tool
 			</p>
 			<p class="mt-4 max-w-md text-sm leading-relaxed text-[var(--color-muted)]">
-				Upload a demo file and external voice/video, mark when the game starts in your recording,
-				choose tracks, then generate a modified <span class="text-[var(--color-fg)]">.dem</span>.
+				Start with a demo file and an audio/video recording. Options for each appear after you pick
+				a file, then generate a modified <span class="text-[var(--color-fg)]">.dem</span>.
 			</p>
 		</header>
 
 		<form
-			class="flex flex-col gap-6"
+			class="flex flex-col gap-8"
 			autocomplete="off"
 			onsubmit={(e) => {
 				e.preventDefault();
 				void onGenerate();
 			}}
 		>
-			<div class="flex flex-col gap-4">
-				<p
-					class="font-[family-name:var(--font-display)] text-xs font-semibold tracking-[0.14em] text-[var(--color-muted)] uppercase"
-				>
-					Demo
-				</p>
-
+			<div class="flex flex-col gap-3">
 				<FileField
 					id="demo-file"
 					label="Demo file"
+					prominent
 					accept=".dem,application/octet-stream"
-					helper="Players are read in the browser when you select the file."
 					file={demoFile}
 					onchange={(f) => void setDemoFile(f)}
 				/>
 
-				<div class="flex flex-col gap-1.5">
-					<label for="speaker" class="text-sm font-medium text-[var(--color-fg-strong)]">
-						Speaker
-					</label>
+				{#if demoFile}
+					<div
+						class="ml-1 flex flex-col gap-1.5 border-l border-[var(--color-border)] pl-4"
+						transition:slide={{ duration: 160 }}
+					>
+						<label for="speaker" class="text-sm font-medium text-[var(--color-muted)]">
+							Speaker
+						</label>
 
-					{#if playersLoading}
-						<LoadingStatus label="Reading players…" />
-					{:else if playersError}
-						<p
-							class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
-							role="alert"
-						>
-							{playersError}
-						</p>
-					{:else if players.length > 0}
-						<select
-							id="speaker"
-							bind:value={selectedPlayerId}
-							class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-fg-strong)]
-								focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
-						>
-							{#each players as player (player.userId)}
-								<option value={String(player.userId)}
-									>{playerLabel(player)} — {player.steamId}</option
-								>
-							{/each}
-						</select>
-						<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-							Injected voice is attributed to this player from the demo.
-						</p>
-					{:else}
-						<p
-							class="rounded border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-[var(--color-muted)]"
-						>
-							Select a demo file to load players.
-						</p>
-					{/if}
-				</div>
+						{#if playersLoading}
+							<LoadingStatus label="Reading players…" />
+						{:else if playersError}
+							<p
+								class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
+								role="alert"
+							>
+								{playersError}
+							</p>
+						{:else if players.length > 0}
+							<select
+								id="speaker"
+								bind:value={selectedPlayerId}
+								class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)]
+									focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
+							>
+								{#each players as player (player.userId)}
+									<option value={String(player.userId)}
+										>{playerLabel(player)} — {player.steamId}</option
+									>
+								{/each}
+							</select>
+							<p class="text-xs leading-relaxed text-[var(--color-muted)]">
+								Who the injected voice should belong to in this demo.
+							</p>
+						{/if}
+					</div>
+				{/if}
 			</div>
 
-			<div class="flex flex-col gap-4 border-t border-[var(--color-border)] pt-6">
-				<p
-					class="font-[family-name:var(--font-display)] text-xs font-semibold tracking-[0.14em] text-[var(--color-muted)] uppercase"
-				>
-					Recording
-				</p>
-
+			<div class="flex flex-col gap-3">
 				<FileField
 					id="media-file"
 					label="Audio / video"
+					prominent
 					accept="video/mp4,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/flac,audio/x-m4a,.mp3,.wav,.ogg,.webm,.flac,.m4a,.mp4"
-					helper="Tracks are read from file metadata (not a full decode)."
 					file={mediaFile}
 					onchange={(f) => void setMediaFile(f)}
 				/>
 
-				<div class="flex flex-col gap-1.5">
-					<label for="media-game-start" class="text-sm font-medium text-[var(--color-fg-strong)]">
-						Game start (seconds)
-					</label>
-					<input
-						id="media-game-start"
-						type="number"
-						min="0"
-						step="0.01"
-						placeholder="e.g. 3"
-						autocomplete="off"
-						inputmode="decimal"
-						bind:value={mediaGameStart}
-						class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-fg-strong)] placeholder:text-[var(--color-muted)]
-							focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
-					/>
-					<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-						How far into the recording until GO / end of the countdown. Audio before this is
-						skipped.
-					</p>
-				</div>
-
-				<div class="flex flex-col gap-1.5">
-					<p class="text-sm font-medium text-[var(--color-fg-strong)]" id="tracks-label">
-						{mediaInfo ? sourceLegend(mediaInfo) : 'Audio channels / tracks'}
-					</p>
-
-					{#if mediaLoading}
-						<LoadingStatus label="Reading tracks…" />
-					{:else if mediaError}
-						<p
-							class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
-							role="alert"
-						>
-							{mediaError}
-						</p>
-					{:else if mediaInfo && mediaInfo.sources.length > 0}
-						<div
-							class="flex flex-col gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
-							role="group"
-							aria-labelledby="tracks-label"
-							transition:fade={{ duration: 180 }}
-						>
-							{#each mediaInfo.sources as source (source.id)}
-								<label
-									class="flex cursor-pointer items-center gap-2.5 py-1.5 text-sm text-[var(--color-fg)]"
-								>
-									<input
-										type="checkbox"
-										checked={selectedSources.includes(source.id)}
-										onchange={() => toggleSource(source.id)}
-										class="rounded border-[var(--color-border-strong)] bg-[var(--color-surface-1)] text-[var(--color-accent)]
-											focus:ring-[var(--color-accent)]"
-									/>
-									<span>{source.label}</span>
-								</label>
-							{/each}
+				{#if mediaFile}
+					<div
+						class="ml-1 flex flex-col gap-4 border-l border-[var(--color-border)] pl-4"
+						transition:slide={{ duration: 160 }}
+					>
+						<div class="flex flex-col gap-1.5">
+							<label for="media-game-start" class="text-sm font-medium text-[var(--color-muted)]">
+								Game start (seconds)
+							</label>
+							<input
+								id="media-game-start"
+								type="number"
+								min="0"
+								step="0.01"
+								placeholder="e.g. 3"
+								autocomplete="off"
+								inputmode="decimal"
+								bind:value={mediaGameStart}
+								class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)] placeholder:text-[var(--color-muted)]
+									focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
+							/>
+							<p class="text-xs leading-relaxed text-[var(--color-muted)]">
+								Seconds into this recording until GO / end of the countdown. Earlier audio is
+								skipped.
+							</p>
 						</div>
-						<p class="text-xs text-[var(--color-muted)]">{mediaInfo.summary}</p>
-					{:else}
-						<p
-							class="rounded border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-[var(--color-muted)]"
-						>
-							Select a media file to list available tracks or channels.
-						</p>
-					{/if}
-				</div>
+
+						<div class="flex flex-col gap-1.5">
+							<p class="text-sm font-medium text-[var(--color-muted)]" id="tracks-label">
+								{mediaInfo ? sourceLegend(mediaInfo) : 'Tracks'}
+							</p>
+
+							{#if mediaLoading}
+								<LoadingStatus label="Reading tracks…" />
+							{:else if mediaError}
+								<p
+									class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
+									role="alert"
+								>
+									{mediaError}
+								</p>
+							{:else if mediaInfo && mediaInfo.sources.length > 0}
+								<div
+									class="flex flex-col gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2"
+									role="group"
+									aria-labelledby="tracks-label"
+									transition:fade={{ duration: 180 }}
+								>
+									{#each mediaInfo.sources as source (source.id)}
+										<label
+											class="flex cursor-pointer items-center gap-2.5 py-1.5 text-sm text-[var(--color-fg)]"
+										>
+											<input
+												type="checkbox"
+												checked={selectedSources.includes(source.id)}
+												onchange={() => toggleSource(source.id)}
+												class="rounded border-[var(--color-border-strong)] bg-[var(--color-surface-2)] text-[var(--color-accent)]
+													focus:ring-[var(--color-accent)]"
+											/>
+											<span>{source.label}</span>
+										</label>
+									{/each}
+								</div>
+								<p class="text-xs text-[var(--color-muted)]">{mediaInfo.summary}</p>
+							{/if}
+						</div>
+					</div>
+				{/if}
 			</div>
 
-			<div class="border-t border-[var(--color-border)] pt-6">
+			<div>
 				<button
 					type="submit"
 					disabled={!canGenerate}
@@ -342,8 +330,7 @@
 					{/if}
 				</button>
 				<p class="mt-2 text-xs leading-relaxed text-[var(--color-muted)]">
-					Nothing is uploaded yet — files stay in the browser. The real flow will convert selected
-					audio, process locally (or on a worker), then download.
+					Files stay in the browser for now. Generate is still a local mock.
 				</p>
 
 				{#if successMessage}
