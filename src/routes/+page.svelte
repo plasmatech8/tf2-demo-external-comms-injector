@@ -330,12 +330,12 @@
 								id="media-game-start"
 								type="number"
 								min="0"
-								step="0.01"
+								step="0.1"
 								required
-								placeholder="e.g. 3"
+								placeholder="e.g. 5.0"
 								autocomplete="off"
 								inputmode="decimal"
-								value={mediaGameStart ?? ''}
+								value={mediaGameStart === null ? '' : mediaGameStart.toFixed(1)}
 								oninput={onGameStartInput}
 								aria-invalid={showGameStartNeeded}
 								class="w-full rounded border bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)] placeholder:text-[var(--color-muted)]
