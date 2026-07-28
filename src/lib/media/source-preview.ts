@@ -291,7 +291,7 @@ function playMediaElement(
 }
 
 /**
- * Play ~4s from the start of a specific inspected source so the user can identify it.
+ * Play ~8s from the start of a specific inspected source so the user can identify it.
  * MP4 tracks are remuxed alone (AAC/Opus); WAV channels read only the PCM head.
  */
 export async function previewMediaSource(
