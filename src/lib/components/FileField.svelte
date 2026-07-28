@@ -10,15 +10,7 @@
 		onchange: (file: File | null) => void;
 	} & Omit<HTMLInputAttributes, 'id' | 'type' | 'accept' | 'onchange'>;
 
-	let {
-		id,
-		label,
-		accept,
-		helper,
-		file,
-		onchange,
-		...rest
-	}: Props = $props();
+	let { id, label, accept, helper, file, onchange, ...rest }: Props = $props();
 
 	let dragging = $state(false);
 
@@ -75,7 +67,9 @@
 			{...rest}
 		/>
 
-		<div class="pointer-events-none flex min-h-[3.25rem] items-center justify-between gap-3 px-3 py-2.5">
+		<div
+			class="pointer-events-none flex min-h-[3.25rem] items-center justify-between gap-3 px-3 py-2.5"
+		>
 			{#if file}
 				<div class="min-w-0 transition-opacity duration-200">
 					<p class="truncate text-sm text-[var(--color-fg-strong)]">{file.name}</p>
@@ -85,9 +79,7 @@
 					>Change</span
 				>
 			{:else}
-				<p class="text-sm text-[var(--color-muted)]">
-					Drop a file here, or click to browse
-				</p>
+				<p class="text-sm text-[var(--color-muted)]">Drop a file here, or click to browse</p>
 			{/if}
 		</div>
 	</div>

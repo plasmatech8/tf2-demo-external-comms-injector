@@ -82,8 +82,8 @@
 </script>
 
 <main
-	class="mx-auto flex min-h-dvh w-full max-w-xl flex-col px-4 py-10 sm:px-6 sm:py-14
-		transition-opacity duration-500 ease-out
+	class="mx-auto flex min-h-dvh w-full max-w-xl flex-col px-4 py-10 transition-opacity duration-500
+		ease-out sm:px-6 sm:py-14
 		{ready ? 'opacity-100' : 'opacity-0'}"
 >
 	<div class="flex-1">
