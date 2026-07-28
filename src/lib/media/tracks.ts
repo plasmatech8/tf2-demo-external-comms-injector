@@ -92,22 +92,84 @@ type Mp4AudioTrack = {
 	audio?: { channel_count?: number; sample_rate?: number };
 };
 
+type Mp4Box = {
+	type?: string;
+	boxes?: Mp4Box[];
+	track_id?: number;
+	name?: string;
+	handler?: string;
+	data?: Uint8Array | ArrayLike<number>;
+};
+
+function decodeBoxString(data: Uint8Array | ArrayLike<number> | undefined): string {
+	if (!data) return '';
+	const bytes = data instanceof Uint8Array ? data : Uint8Array.from(data);
+	let end = bytes.length;
+	while (end > 0 && bytes[end - 1] === 0) end -= 1;
+	if (end <= 0) return '';
+
+	// QuickTime Pascal-style length prefix
+	let start = 0;
+	if (bytes[0] === end - 1 && end > 1) start = 1;
+
+	return new TextDecoder('utf-8', { fatal: false }).decode(bytes.subarray(start, end)).trim();
+}
+
+function findChild(box: Mp4Box | undefined, type: string): Mp4Box | undefined {
+	return box?.boxes?.find((child) => child.type === type);
+}
+
+function findDeep(box: Mp4Box | undefined, type: string): Mp4Box | undefined {
+	if (!box) return undefined;
+	if (box.type === type) return box;
+	for (const child of box.boxes ?? []) {
+		const found = findDeep(child, type);
+		if (found) return found;
+	}
+	return undefined;
+}
+
+/**
+ * Medal / ffmpeg often store human track titles in trak/udta/name,
+ * while hdlr stays as the useless "SoundHandler".
+ */
+function readTrackDisplayNames(mp4: { getBox: (type: string) => Mp4Box }): Map<number, string> {
+	const names = new Map<number, string>();
+	const moov = mp4.getBox('moov');
+	if (!moov?.boxes) return names;
+
+	for (const trak of moov.boxes.filter((box) => box.type === 'trak')) {
+		const trackId = findChild(trak, 'tkhd')?.track_id;
+		if (typeof trackId !== 'number') continue;
+
+		const udtaName = decodeBoxString(findChild(findChild(trak, 'udta'), 'name')?.data);
+		const hdlrName = (findDeep(trak, 'hdlr')?.name ?? '').trim();
+		const chosen =
+			udtaName || (!isGenericHandlerName(hdlrName) && hdlrName !== 'VideoHandler' ? hdlrName : '');
+		if (chosen) names.set(trackId, chosen);
+	}
+
+	return names;
+}
+
 function sourcesFromMp4Tracks(audioTracks: Mp4AudioTrack[]): MediaSource[] {
 	const sources: MediaSource[] = audioTracks.map((track, i) => {
 		const rawName = (track.name ?? '').trim();
 		const niceName = isGenericHandlerName(rawName) ? '' : rawName;
 		const channels = track.audio?.channel_count ?? 0;
 		const sampleRate = track.audio?.sample_rate ?? 0;
-		const parts = [
-			`Track ${i + 1}`,
-			niceName || `id ${track.id}`,
+		const details = [
 			channels ? `${channels}ch` : null,
 			sampleRate ? `${Math.round(sampleRate / 100) / 10} kHz` : null
 		].filter(Boolean);
 
+		const label = niceName
+			? [niceName, details.length ? details.join(' · ') : null].filter(Boolean).join(' — ')
+			: [`Track ${i + 1}`, ...details].filter(Boolean).join(' — ');
+
 		return {
 			id: `track:${track.id}`,
-			label: parts.join(' — '),
+			label,
 			defaultSelected: defaultTrackSelection(niceName || rawName, audioTracks.length),
 			trackId: track.id,
 			channels: channels || undefined,
@@ -134,7 +196,9 @@ async function parseMp4AudioTracks(file: File): Promise<Mp4AudioTrack[]> {
 	const { createFile, MP4BoxBuffer } = await import('mp4box');
 
 	return new Promise((resolve, reject) => {
-		const mp4 = createFile();
+		// mp4box typings vary across builds; keep the instance loosely typed.
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const mp4: any = createFile();
 		let settled = false;
 
 		const finish = (tracks: Mp4AudioTrack[]) => {
@@ -150,8 +214,13 @@ async function parseMp4AudioTracks(file: File): Promise<Mp4AudioTrack[]> {
 		};
 
 		mp4.onError = (err: string) => fail(new Error(err || 'Failed to parse MP4'));
-		mp4.onReady = (movie) => {
-			finish(movie.audioTracks ?? []);
+		mp4.onReady = (movie: { audioTracks?: Mp4AudioTrack[] }) => {
+			const displayNames = readTrackDisplayNames(mp4);
+			const tracks = (movie.audioTracks ?? []).map((track) => ({
+				...track,
+				name: displayNames.get(track.id) || track.name
+			}));
+			finish(tracks);
 		};
 
 		void (async () => {
@@ -164,7 +233,7 @@ async function parseMp4AudioTracks(file: File): Promise<Mp4AudioTrack[]> {
 					const ab = await file.slice(offset, end).arrayBuffer();
 					if (settled) return;
 					const buf = MP4BoxBuffer.fromArrayBuffer(ab, offset);
-					const next = mp4.appendBuffer(buf) as number | undefined;
+					const next = mp4.appendBuffer(buf);
 					if (settled) return;
 
 					if (typeof next === 'number' && next > offset) {
