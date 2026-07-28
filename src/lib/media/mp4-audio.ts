@@ -30,6 +30,7 @@ type Mp4Box = {
 type Sample = {
 	data: ArrayBuffer | Uint8Array;
 	cts: number;
+	dts?: number;
 	duration: number;
 	timescale: number;
 	is_sync: boolean;
@@ -294,7 +295,13 @@ export async function extractMp4AudioTrackHeads(
 				if (!list) return;
 				for (const sample of samples) {
 					if (sample.cts / sample.timescale > maxSec + 0.75) continue;
-					list.push(sample);
+					// Copy payload — mp4box reuses underlying buffers across batches.
+					const raw = sample.data;
+					const data =
+						raw instanceof Uint8Array
+							? raw.slice()
+							: new Uint8Array(raw instanceof ArrayBuffer ? raw : Uint8Array.from(raw as ArrayLike<number>));
+					list.push({ ...sample, data });
 				}
 			};
 			mp4.start();
@@ -347,9 +354,19 @@ export async function extractMp4AudioTrackHeads(
 		if (samples.length === 0) continue;
 		const sampleRate = track.audio?.sample_rate || 44100;
 		const channels = track.audio?.channel_count || 1;
-		const asc = getAudioSpecificConfig(mp4, track.id);
-		const adts = samplesToAdts(samples, asc, sampleRate, channels, maxSec);
-		const decoded = await decodeAdts(adts, maxSec);
+		const codec = (track.codec ?? '').toLowerCase();
+		let decoded: { samples: Float32Array; sampleRate: number } | null = null;
+
+		if (codec.includes('mp4a') || codec.startsWith('aac') || !codec || codec.includes('40.')) {
+			const asc = getAudioSpecificConfig(mp4, track.id);
+			const adts = samplesToAdts(samples, asc, sampleRate, channels, maxSec);
+			decoded = await decodeAdts(adts, maxSec);
+		}
+
+		if (!decoded) {
+			decoded = await decodeWithWebCodecs(samples, track, mp4, maxSec);
+		}
+
 		if (!decoded || decoded.samples.length < decoded.sampleRate * 0.25) continue;
 		out.push({
 			samples: decoded.samples,
@@ -360,4 +377,300 @@ export async function extractMp4AudioTrackHeads(
 	}
 
 	return out;
+}
+
+type CollectedSample = {
+	data: Uint8Array;
+	duration: number;
+	cts: number;
+	dts: number;
+	is_sync: boolean;
+	timescale: number;
+};
+
+type TrackRemuxMeta = {
+	type: string;
+	codec: string;
+	timescale: number;
+	channelCount: number;
+	sampleSize: number;
+	sampleRate: number;
+	descriptionBoxes: unknown[];
+};
+
+function copySampleData(raw: ArrayBuffer | Uint8Array | ArrayLike<number>): Uint8Array {
+	if (raw instanceof Uint8Array) return raw.slice();
+	if (raw instanceof ArrayBuffer) return new Uint8Array(raw).slice();
+	return Uint8Array.from(raw);
+}
+
+function dataStreamToUint8(stream: {
+	buffer?: ArrayBuffer;
+	byteOffset?: number;
+	byteLength?: number;
+	position?: number;
+}): Uint8Array | null {
+	if (!(stream.buffer instanceof ArrayBuffer)) return null;
+	const length = stream.byteLength ?? stream.position ?? stream.buffer.byteLength;
+	return new Uint8Array(stream.buffer, stream.byteOffset ?? 0, length);
+}
+
+async function collectTrackSamples(
+	file: File,
+	trackId: number,
+	maxSec: number,
+	signal?: AbortSignal
+): Promise<{ meta: TrackRemuxMeta; samples: CollectedSample[] } | null> {
+	throwIfAborted(signal);
+	const { createFile, MP4BoxBuffer } = await import('mp4box');
+	throwIfAborted(signal);
+
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const mp4: any = createFile();
+	const samples: CollectedSample[] = [];
+	let meta: TrackRemuxMeta | null = null;
+	let started = false;
+
+	const ready = new Promise<void>((resolve, reject) => {
+		mp4.onError = (msg: string) => reject(new Error(msg || 'MP4 parse failed'));
+		mp4.onReady = (movie: { audioTracks?: Mp4AudioTrackInfo[] }) => {
+			const track = (movie.audioTracks ?? []).find((t) => t.id === trackId);
+			if (!track) {
+				reject(new Error('Audio track not found'));
+				return;
+			}
+			// eslint-disable-next-line @typescript-eslint/no-explicit-any
+			const trak: any = mp4.getTrackById?.(trackId);
+			const entry = trak?.mdia?.minf?.stbl?.stsd?.entries?.[0];
+			const boxes = entry?.boxes ? [...entry.boxes] : entry?.esds ? [entry.esds] : [];
+			meta = {
+				type: entry?.type || (String(track.codec).toLowerCase().includes('opus') ? 'Opus' : 'mp4a'),
+				codec: track.codec ?? '',
+				timescale: (track as { timescale?: number }).timescale || trak?.mdia?.mdhd?.timescale || 48000,
+				channelCount: track.audio?.channel_count || entry?.channel_count || 2,
+				sampleSize: entry?.samplesize || 16,
+				sampleRate: track.audio?.sample_rate || entry?.samplerate || 48000,
+				descriptionBoxes: boxes
+			};
+			mp4.onSamples = (_id: number, _user: unknown, batch: Sample[]) => {
+				for (const sample of batch) {
+					if (sample.cts / sample.timescale > maxSec + 0.5) continue;
+					samples.push({
+						data: copySampleData(sample.data),
+						duration: sample.duration,
+						cts: sample.cts,
+						dts: sample.dts ?? sample.cts,
+						is_sync: sample.is_sync,
+						timescale: sample.timescale
+					});
+				}
+			};
+			mp4.setExtractionOptions(trackId, trackId, { nbSamples: 100 });
+			mp4.start();
+			started = true;
+			resolve();
+		};
+	});
+
+	let offset = 0;
+	let guard = 0;
+	while (offset < file.size && guard < 1536) {
+		throwIfAborted(signal);
+		guard += 1;
+		const end = Math.min(offset + MP4_CHUNK_SIZE, file.size);
+		const ab = await file.slice(offset, end).arrayBuffer();
+		throwIfAborted(signal);
+		const next = mp4.appendBuffer(MP4BoxBuffer.fromArrayBuffer(ab, offset));
+		if (typeof next === 'number' && next > offset) offset = next;
+		else offset = end;
+
+		if (!started && mp4.moov) await ready;
+
+		if (started && samples.length > 0) {
+			const last = samples[samples.length - 1];
+			if (last.cts / last.timescale >= Math.min(maxSec, 8) - 0.05) break;
+		}
+	}
+
+	await ready.catch(() => undefined);
+	mp4.flush();
+	try {
+		mp4.stop();
+	} catch {
+		/* ignore */
+	}
+
+	if (!meta || samples.length === 0) return null;
+	return { meta, samples };
+}
+
+async function decodeWithWebCodecs(
+	samples: Sample[],
+	track: Mp4AudioTrackInfo,
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	mp4: any,
+	maxSec: number
+): Promise<{ samples: Float32Array; sampleRate: number } | null> {
+	if (typeof AudioDecoder === 'undefined' || typeof EncodedAudioChunk === 'undefined') return null;
+
+	const sampleRate = track.audio?.sample_rate || 44100;
+	const channels = track.audio?.channel_count || 1;
+	let codec = (track.codec || '').trim();
+	if (!codec) return null;
+	if (/^opus$/i.test(codec)) codec = 'opus';
+
+	const config: AudioDecoderConfig = {
+		codec,
+		sampleRate,
+		numberOfChannels: channels
+	};
+	const asc = getAudioSpecificConfig(mp4, track.id);
+	if (asc && /mp4a|aac/i.test(codec)) {
+		config.description = Uint8Array.from(asc).buffer;
+	}
+
+	try {
+		const support = await AudioDecoder.isConfigSupported(config);
+		if (!support.supported) return null;
+	} catch {
+		return null;
+	}
+
+	const chunks: Float32Array[] = [];
+	let outRate = sampleRate;
+	let frames = 0;
+	const maxFrames = Math.ceil(sampleRate * maxSec);
+
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const decoder = new AudioDecoder({
+				output: (audioData) => {
+					try {
+						outRate = audioData.sampleRate;
+						const need = Math.min(audioData.numberOfFrames, Math.max(0, maxFrames - frames));
+						if (need <= 0) {
+							audioData.close();
+							return;
+						}
+						const mono = new Float32Array(need);
+						const ch = audioData.numberOfChannels;
+						for (let c = 0; c < ch; c++) {
+							const plane = new Float32Array(need);
+							audioData.copyTo(plane, { planeIndex: c, frameOffset: 0, frameCount: need });
+							for (let i = 0; i < need; i++) mono[i] += plane[i] / ch;
+						}
+						chunks.push(mono);
+						frames += need;
+						audioData.close();
+					} catch (e) {
+						audioData.close();
+						reject(e);
+					}
+				},
+				error: (e) => reject(e)
+			});
+			decoder.configure(config);
+			for (const sample of samples) {
+				if (frames >= maxFrames) break;
+				if (sample.cts / sample.timescale > maxSec + 0.25) break;
+				const data =
+					sample.data instanceof Uint8Array
+						? sample.data
+						: new Uint8Array(
+								sample.data instanceof ArrayBuffer
+									? sample.data
+									: Uint8Array.from(sample.data as ArrayLike<number>)
+							);
+				decoder.decode(
+					new EncodedAudioChunk({
+						type: sample.is_sync ? 'key' : 'delta',
+						timestamp: Math.round((sample.cts / sample.timescale) * 1e6),
+						duration: Math.round((sample.duration / sample.timescale) * 1e6),
+						data
+					})
+				);
+			}
+			decoder
+				.flush()
+				.then(() => {
+					decoder.close();
+					resolve();
+				})
+				.catch(reject);
+		});
+	} catch {
+		return null;
+	}
+
+	if (!chunks.length || frames < sampleRate * 0.2) return null;
+	const merged = new Float32Array(frames);
+	let offset = 0;
+	for (const chunk of chunks) {
+		merged.set(chunk.subarray(0, Math.min(chunk.length, merged.length - offset)), offset);
+		offset += chunk.length;
+		if (offset >= merged.length) break;
+	}
+	return { samples: merged.subarray(0, Math.min(offset, maxFrames)), sampleRate: outRate };
+}
+
+/**
+ * Remux the first `maxSec` of one audio track into a tiny playable MP4/M4A blob.
+ * Works for AAC and Opus without relying on ADTS + decodeAudioData.
+ */
+export async function remuxMp4AudioTrackHead(
+	file: File,
+	trackId: number,
+	maxSec: number,
+	signal?: AbortSignal
+): Promise<Blob | null> {
+	const name = file.name.toLowerCase();
+	const type = file.type.toLowerCase();
+	const isMp4Family =
+		type.includes('mp4') ||
+		type.includes('m4a') ||
+		type.includes('quicktime') ||
+		/\.(mp4|m4a|mov)$/i.test(name);
+	if (!isMp4Family) return null;
+
+	const collected = await collectTrackSamples(file, trackId, maxSec, signal);
+	if (!collected) return null;
+
+	const { createFile } = await import('mp4box');
+	throwIfAborted(signal);
+
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	const out: any = createFile();
+	const { meta, samples } = collected;
+	const options: Record<string, unknown> = {
+		id: 1,
+		type: meta.type,
+		hdlr: 'soun',
+		name: 'preview',
+		timescale: meta.timescale,
+		channel_count: meta.channelCount,
+		samplesize: meta.sampleSize,
+		samplerate: meta.sampleRate,
+		language: 'und'
+	};
+	if (meta.descriptionBoxes.length) {
+		options.description_boxes = meta.descriptionBoxes;
+	}
+
+	const newId = out.addTrack(options);
+	if (!newId) return null;
+
+	for (const sample of samples) {
+		out.addSample(newId, sample.data, {
+			duration: sample.duration,
+			cts: sample.cts,
+			dts: sample.dts,
+			is_sync: sample.is_sync
+		});
+	}
+
+	const stream = out.getBuffer();
+	const bytes = dataStreamToUint8(stream);
+	if (!bytes || bytes.byteLength < 64) return null;
+	// Copy so we don't retain the DataStream's backing buffer.
+	return new Blob([bytes.slice()], { type: 'audio/mp4' });
 }
