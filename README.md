@@ -26,7 +26,7 @@ cargo build --release
 # Inspect players / voice codec
 ./target/release/inspect-demo samples/match-20260717-1011-koth_proot_b6c-alt2.dem
 
-# Inject a tone as plasmatech8 starting at t=10s
+# Inject a tone as plasmatech8 (demo offset auto = teamplay_round_start, or pass --offset)
 ./target/release/inject-comms \
   samples/match-20260717-1011-koth_proot_b6c-alt2.dem \
   samples/test_tone_440hz.wav \
@@ -54,13 +54,15 @@ ffmpeg -i input.mp4 -ar 24000 -ac 1 samples/comms.wav
 | `demo` | Input `.dem` |
 | `audio` | Input `.wav` (PCM) |
 | `-o, --output` | Output `.dem` |
-| `--offset` | Start time in seconds (default `0`) |
+| `--audio-skip` | Seconds to skip from the start of the input audio (game start in the recording; default `0`) |
+| `--offset` | Demo-time inject start in seconds. **Default: auto** `teamplay_round_start`, else `0`. Not the same as `--audio-skip` — see [docs/timing.md](docs/timing.md) |
 | `--loudness-db` | Gain in dB (default `0`) |
 | `--gain` | Linear gain (overrides dB) |
 | `--player` | Player name substring |
 | `--steam-id` | SteamID64 / `STEAM_X:Y:Z` / `[U:1:n]` |
 | `--client-index` | Explicit 0-based slot |
-| `--sample-rate` | Encode rate (default `24000`) |
+| `--sample-rate` | Encode rate (default `24000`; use 24 kHz for TF2 playback) |
+| `--bitrate` | Opus bitrate bits/sec (default `64000`) |
 | `--replace-existing` | Drop that client's voice in the injection window |
 
 ### `inspect-demo` / `extract-voice`
@@ -75,9 +77,11 @@ Modern TF2 uses `sv_voicecodec steam`. Voice in demos is carried as `svc_VoiceDa
 steamid64 | SampleRate(0x0B) | OpusPlc(0x06, len/seq/opus…) | CRC32
 ```
 
-This tool encodes your audio with libopus, wraps it in that format, and splices messages into `dem_packet` frames at ticks corresponding to `--offset` and frame duration (~20 ms).
+This tool encodes your audio with libopus, wraps it in that format, and splices messages into `dem_packet` frames at ticks corresponding to the resolved demo `--offset` (auto round-start by default) and frame duration (~20 ms).
 
 Voice is attributed to an existing player slot (client index + steamid) so the demo player has a valid speaker identity.
+
+**Sync:** `--audio-skip` trims the recording; `--offset` places it on the demo timeline. Details: [docs/timing.md](docs/timing.md).
 
 ## Verification (no TF2 required)
 

@@ -7,6 +7,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use bitbuffer::{BitRead, BitReadBuffer, BitReadStream, BitWrite, LittleEndian};
 use serde::Serialize;
 use tf_demo_parser::demo::data::DemoTick;
+use tf_demo_parser::demo::gameevent_gen::GameEvent;
 use tf_demo_parser::demo::header::Header;
 use tf_demo_parser::demo::message::voice::VoiceDataMessage;
 use tf_demo_parser::demo::message::{Message, MessageType};
@@ -37,6 +38,8 @@ pub struct InspectReport {
     pub ticks: u32,
     pub frames: u32,
     pub tickrate: f32,
+    /// First `teamplay_round_start` time in demo seconds, if present (typical “GO”).
+    pub round_start_secs: Option<f32>,
     pub voice_init: Option<VoiceInitSummary>,
     pub existing_voice_packets: usize,
     pub players: Vec<PlayerSlot>,
@@ -54,8 +57,10 @@ pub struct InjectOptions {
     pub demo_path: std::path::PathBuf,
     pub audio_path: std::path::PathBuf,
     pub output_path: std::path::PathBuf,
-    /// Start time in seconds from demo start.
-    pub offset_secs: f32,
+    /// Demo-time inject start in seconds. `None` = auto `teamplay_round_start`, else `0`.
+    pub offset_secs: Option<f32>,
+    /// Seconds to drop from the start of the input audio (game start in the recording).
+    pub audio_skip_secs: f32,
     pub loudness: Loudness,
     /// Prefer matching by name substring (case-insensitive).
     pub player_name: Option<String>,
@@ -75,6 +80,11 @@ pub struct InjectResult {
     pub output: String,
     pub player: PlayerSlot,
     pub start_tick: u32,
+    /// Demo-time seconds where injection begins.
+    pub offset_secs: f32,
+    /// `manual` | `teamplay_round_start` | `fallback_zero`
+    pub offset_source: String,
+    pub audio_skip_secs: f32,
     pub packets_injected: usize,
     pub voice_init: Option<VoiceInitSummary>,
 }
@@ -91,6 +101,7 @@ pub fn inspect_demo(path: &Path) -> Result<InspectReport> {
     let mut voice_init = None;
     let mut voice_count = 0usize;
     let mut players: BTreeMap<u8, PlayerSlot> = BTreeMap::new();
+    let mut round_start_tick: Option<u32> = None;
     let mut tickrate = if header.ticks > 0 && header.duration > 0.0 {
         header.ticks as f32 / header.duration
     } else {
@@ -100,6 +111,7 @@ pub fn inspect_demo(path: &Path) -> Result<InspectReport> {
     while let Some(packet) = packets.next(&handler.state_handler)? {
         match &packet {
             Packet::Signon(msg) | Packet::Message(msg) => {
+                let pkt_tick: u32 = msg.tick.into();
                 for message in &msg.messages {
                     match message {
                         Message::VoiceInit(init) => {
@@ -113,6 +125,13 @@ pub fn inspect_demo(path: &Path) -> Result<InspectReport> {
                         Message::ServerInfo(info) => {
                             if info.interval_per_tick > 0.0 {
                                 tickrate = 1.0 / info.interval_per_tick;
+                            }
+                        }
+                        Message::GameEvent(ev) => {
+                            if round_start_tick.is_none()
+                                && matches!(ev.event, GameEvent::TeamPlayRoundStart(_))
+                            {
+                                round_start_tick = Some(pkt_tick);
                             }
                         }
                         _ => {}
@@ -154,6 +173,7 @@ pub fn inspect_demo(path: &Path) -> Result<InspectReport> {
         ticks: header.ticks,
         frames: header.frames,
         tickrate,
+        round_start_secs: round_start_tick.map(|t| t as f32 / tickrate),
         voice_init,
         existing_voice_packets: voice_count,
         players: players.into_values().collect(),
@@ -262,7 +282,28 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
         ),
     };
 
-    let pcm = load_mono_pcm(&opts.audio_path, opts.sample_rate, opts.loudness)?;
+    let (offset_secs, offset_source) = resolve_demo_offset(opts.offset_secs, report.round_start_secs);
+    if offset_source == "fallback_zero" {
+        eprintln!(
+            "warning: no teamplay_round_start in demo; injecting at demo t=0. \
+             Pass --offset explicitly if that is wrong."
+        );
+    }
+
+    let mut pcm = load_mono_pcm(&opts.audio_path, opts.sample_rate, opts.loudness)?;
+    let audio_skip_secs = opts.audio_skip_secs.max(0.0);
+    if audio_skip_secs > 0.0 {
+        let skip = (audio_skip_secs * opts.sample_rate as f32).round() as usize;
+        if skip >= pcm.len() {
+            bail!(
+                "--audio-skip {audio_skip_secs}s removes all audio ({} samples @ {} Hz)",
+                pcm.len(),
+                opts.sample_rate
+            );
+        }
+        pcm = pcm[skip..].to_vec();
+    }
+
     let bitrate = if opts.bitrate == 0 {
         DEFAULT_BITRATE
     } else {
@@ -274,7 +315,7 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
         bail!("no voice frames produced from audio");
     }
 
-    let start_tick = (opts.offset_secs * report.tickrate).round().max(0.0) as u32;
+    let start_tick = (offset_secs * report.tickrate).round().max(0.0) as u32;
     let ticks_per_frame = (report.tickrate * (encoder.frame_samples() as f32)
         / opts.sample_rate as f32)
         .max(1.0);
@@ -412,9 +453,25 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
         output: opts.output_path.display().to_string(),
         player,
         start_tick,
+        offset_secs,
+        offset_source: offset_source.to_string(),
+        audio_skip_secs,
         packets_injected,
         voice_init: report.voice_init,
     })
+}
+
+fn resolve_demo_offset(
+    manual: Option<f32>,
+    round_start_secs: Option<f32>,
+) -> (f32, &'static str) {
+    if let Some(secs) = manual {
+        return (secs.max(0.0), "manual");
+    }
+    if let Some(secs) = round_start_secs {
+        return (secs.max(0.0), "teamplay_round_start");
+    }
+    (0.0, "fallback_zero")
 }
 
 /// Copy a raw `dem_packet` (Message) and append Steam voice messages to its payload.

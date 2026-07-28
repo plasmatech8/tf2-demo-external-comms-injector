@@ -78,7 +78,9 @@ This does **not** prove the TF2 client’s voice mixer will accept the packets (
 - **steam-audio-codec** — decode/validate Steam Voice
 - **demboyz** — C++ dem↔json and voice *extraction* (needs Steam API for decode); README jokes about adding phony voice, which matches this use-case
 
-## Open risks for in-game play
+## Timing
+
+`--audio-skip` (recording GO) is not `--offset` (demo timeline). Default offset is auto `teamplay_round_start`. See [timing.md](timing.md).
 
 1. STV viewer may gate voice on server/TV settings from when the demo was recorded.
 2. Attribution UI may require the client index to still be “connected” at that tick.

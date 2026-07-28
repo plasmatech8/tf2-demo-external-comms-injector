@@ -18,9 +18,13 @@ struct Args {
     /// Output .dem path
     #[arg(short, long)]
     output: PathBuf,
-    /// Start offset in seconds from demo beginning
+    /// Demo-time inject start in seconds. Default: auto teamplay_round_start (else 0).
+    /// This is NOT “game start in your recording” — use --audio-skip for that.
+    #[arg(long)]
+    offset: Option<f32>,
+    /// Seconds to skip from the start of the input audio (game start / end of countdown in the recording).
     #[arg(long, default_value_t = 0.0)]
-    offset: f32,
+    audio_skip: f32,
     /// Loudness gain as dB (e.g. -6, 0, 3)
     #[arg(long, default_value_t = 0.0)]
     loudness_db: f32,
@@ -36,7 +40,7 @@ struct Args {
     /// Explicit client slot index (0-based)
     #[arg(long)]
     client_index: Option<u8>,
-    /// Opus/Steam voice sample rate
+    /// Opus/Steam voice sample rate (use 24000 for in-game TF2 playback)
     #[arg(long, default_value_t = DEFAULT_SAMPLE_RATE)]
     sample_rate: u32,
     /// Opus bitrate in bits/sec (default 64000). Higher = clearer; -1 = max.
@@ -60,6 +64,7 @@ fn main() -> Result<()> {
         audio_path: args.audio,
         output_path: args.output,
         offset_secs: args.offset,
+        audio_skip_secs: args.audio_skip,
         loudness,
         player_name: args.player,
         steam_id: args.steam_id,

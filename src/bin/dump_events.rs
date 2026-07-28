@@ -20,7 +20,6 @@ struct Args {
 }
 
 struct EventDump {
-    tickrate: f32,
     max_tick: u32,
     rows: Vec<(u32, String)>,
 }
@@ -79,7 +78,6 @@ fn main() -> Result<()> {
 
     let mut packets = RawPacketStream::new(stream);
     let mut handler = DemoHandler::parse_all_with_analyser(EventDump {
-        tickrate,
         max_tick,
         rows: Vec::new(),
     });
