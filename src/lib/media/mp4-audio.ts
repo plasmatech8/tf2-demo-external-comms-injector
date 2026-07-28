@@ -264,6 +264,21 @@ export async function extractMp4AudioTrackHeads(
 		/\.(mp4|m4a|mov)$/i.test(name);
 	if (!isMp4Family) return [];
 
+	if (typeof onlyTrackId === 'number') {
+		const collected = await collectTrackSamples(file, onlyTrackId, maxSec, signal);
+		if (!collected) return [];
+		const decoded = await decodeCollectedTrack(collected, maxSec);
+		if (!decoded) return [];
+		return [
+			{
+				samples: decoded.samples,
+				sampleRate: decoded.sampleRate,
+				trackLabel: `track ${onlyTrackId}`,
+				trackId: onlyTrackId
+			}
+		];
+	}
+
 	const { createFile, MP4BoxBuffer } = await import('mp4box');
 	throwIfAborted(signal);
 
@@ -410,9 +425,81 @@ function dataStreamToUint8(stream: {
 	byteLength?: number;
 	position?: number;
 }): Uint8Array | null {
-	if (!(stream.buffer instanceof ArrayBuffer)) return null;
-	const length = stream.byteLength ?? stream.position ?? stream.buffer.byteLength;
-	return new Uint8Array(stream.buffer, stream.byteOffset ?? 0, length);
+	const buf = stream.buffer;
+	if (!buf) return null;
+	const length = stream.byteLength ?? stream.position ?? (buf as ArrayBuffer).byteLength;
+	if (typeof length !== 'number' || length <= 0) return null;
+	try {
+		return new Uint8Array(buf as ArrayBuffer, stream.byteOffset ?? 0, length);
+	} catch {
+		return null;
+	}
+}
+
+function findAscInDescriptionBoxes(boxes: unknown[]): Uint8Array | undefined {
+	for (const box of boxes) {
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		const b: any = box;
+		if (!b) continue;
+		if (b.tag === 0x05 && b.data) {
+			return b.data instanceof Uint8Array ? b.data : new Uint8Array(b.data);
+		}
+		const nested = findAscInDescriptionBoxes(b.descs ?? b.boxes ?? []);
+		if (nested) return nested;
+		if (b.esd?.descs) {
+			const fromEsd = findAscInDescriptionBoxes(b.esd.descs);
+			if (fromEsd) return fromEsd;
+		}
+	}
+	return undefined;
+}
+
+async function decodeCollectedTrack(
+	collected: { meta: TrackRemuxMeta; samples: CollectedSample[] },
+	maxSec: number
+): Promise<{ samples: Float32Array; sampleRate: number } | null> {
+	const { meta, samples } = collected;
+	if (!samples.length) return null;
+
+	const asSamples: Sample[] = samples.map((s) => ({
+		data: s.data,
+		cts: s.cts,
+		dts: s.dts,
+		duration: s.duration,
+		timescale: s.timescale,
+		is_sync: s.is_sync
+	}));
+
+	const codec = meta.codec.toLowerCase();
+	if (meta.type === 'mp4a' || codec.includes('mp4a') || codec.includes('aac') || codec.includes('40.')) {
+		const asc = findAscInDescriptionBoxes(meta.descriptionBoxes);
+		const adts = samplesToAdts(asSamples, asc, meta.sampleRate, meta.channelCount, maxSec);
+		const decoded = await decodeAdts(adts, maxSec);
+		if (decoded && decoded.samples.length >= decoded.sampleRate * 0.2) return decoded;
+	}
+
+	return decodeWithWebCodecs(
+		asSamples,
+		{
+			id: 0,
+			codec: meta.codec,
+			audio: { sample_rate: meta.sampleRate, channel_count: meta.channelCount }
+		},
+		{
+			getTrackById: () => ({
+				mdia: {
+					minf: {
+						stbl: {
+							stsd: {
+								entries: [{ esds: meta.descriptionBoxes[0], boxes: meta.descriptionBoxes }]
+							}
+						}
+					}
+				}
+			})
+		},
+		maxSec
+	);
 }
 
 async function collectTrackSamples(
@@ -427,9 +514,12 @@ async function collectTrackSamples(
 
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const mp4: any = createFile();
+	// Default true: fine once extraction is armed. Moov-at-end Medal files need a
+	// second pass from byte 0 after moov is known (mdat was discarded on first pass).
+	mp4.discardMdatData = true;
+
 	const samples: CollectedSample[] = [];
 	let meta: TrackRemuxMeta | null = null;
-	let started = false;
 
 	const ready = new Promise<void>((resolve, reject) => {
 		mp4.onError = (msg: string) => reject(new Error(msg || 'MP4 parse failed'));
@@ -443,20 +533,25 @@ async function collectTrackSamples(
 			const trak: any = mp4.getTrackById?.(trackId);
 			const entry = trak?.mdia?.minf?.stbl?.stsd?.entries?.[0];
 			const boxes = entry?.boxes ? [...entry.boxes] : entry?.esds ? [entry.esds] : [];
+			const rawRate = track.audio?.sample_rate || entry?.samplerate || 48000;
+			// AudioSampleEntry.samplerate is often 16.16 fixed-point.
+			const sampleRate = rawRate > 100000 ? Math.round(rawRate / 65536) : rawRate;
 			meta = {
 				type: entry?.type || (String(track.codec).toLowerCase().includes('opus') ? 'Opus' : 'mp4a'),
 				codec: track.codec ?? '',
 				timescale: (track as { timescale?: number }).timescale || trak?.mdia?.mdhd?.timescale || 48000,
 				channelCount: track.audio?.channel_count || entry?.channel_count || 2,
 				sampleSize: entry?.samplesize || 16,
-				sampleRate: track.audio?.sample_rate || entry?.samplerate || 48000,
+				sampleRate,
 				descriptionBoxes: boxes
 			};
 			mp4.onSamples = (_id: number, _user: unknown, batch: Sample[]) => {
 				for (const sample of batch) {
 					if (sample.cts / sample.timescale > maxSec + 0.5) continue;
+					const data = copySampleData(sample.data);
+					if (!data.byteLength) continue;
 					samples.push({
-						data: copySampleData(sample.data),
+						data,
 						duration: sample.duration,
 						cts: sample.cts,
 						dts: sample.dts ?? sample.cts,
@@ -467,32 +562,63 @@ async function collectTrackSamples(
 			};
 			mp4.setExtractionOptions(trackId, trackId, { nbSamples: 100 });
 			mp4.start();
-			started = true;
 			resolve();
 		};
 	});
 
-	let offset = 0;
-	let guard = 0;
-	while (offset < file.size && guard < 1536) {
+	const appendRange = async (start: number, end: number) => {
 		throwIfAborted(signal);
-		guard += 1;
-		const end = Math.min(offset + MP4_CHUNK_SIZE, file.size);
-		const ab = await file.slice(offset, end).arrayBuffer();
+		if (end <= start) return start;
+		const ab = await file.slice(start, end).arrayBuffer();
 		throwIfAborted(signal);
-		const next = mp4.appendBuffer(MP4BoxBuffer.fromArrayBuffer(ab, offset));
-		if (typeof next === 'number' && next > offset) offset = next;
-		else offset = end;
+		const next = mp4.appendBuffer(MP4BoxBuffer.fromArrayBuffer(ab, start));
+		return typeof next === 'number' && next > start ? next : end;
+	};
 
-		if (!started && mp4.moov) await ready;
+	const enoughSamples = () => {
+		if (samples.length === 0) return false;
+		const last = samples[samples.length - 1];
+		return last.cts / last.timescale >= Math.min(maxSec, 8) - 0.05;
+	};
 
-		if (started && samples.length > 0) {
-			const last = samples[samples.length - 1];
-			if (last.cts / last.timescale >= Math.min(maxSec, 8) - 0.05) break;
+	// Pass 1: find moov. Medal/ffmpeg often put moov at the end — probe the tail first.
+	const tailBytes = Math.min(file.size, 8 * MP4_CHUNK_SIZE);
+	if (tailBytes > 0) {
+		await appendRange(file.size - tailBytes, file.size);
+	}
+
+	if (!mp4.moov) {
+		let offset = 0;
+		const stopBeforeTail = Math.max(0, file.size - tailBytes);
+		let guard = 0;
+		while (!mp4.moov && offset < stopBeforeTail && guard < 1536) {
+			guard += 1;
+			offset = await appendRange(offset, Math.min(offset + MP4_CHUNK_SIZE, stopBeforeTail));
 		}
 	}
 
-	await ready.catch(() => undefined);
+	try {
+		await ready;
+	} catch {
+		return null;
+	}
+
+	// Pass 2: if mdat came before moov, payloads were discarded — re-read from the start
+	// with extraction already armed so onSamples receives real data.
+	if (!enoughSamples()) {
+		let offset = 0;
+		let guard = 0;
+		while (offset < file.size && guard < 1536 && !enoughSamples()) {
+			guard += 1;
+			const end = Math.min(offset + MP4_CHUNK_SIZE, file.size);
+			try {
+				offset = await appendRange(offset, end);
+			} catch {
+				offset = end;
+			}
+		}
+	}
+
 	mp4.flush();
 	try {
 		mp4.stop();

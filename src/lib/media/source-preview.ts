@@ -1,6 +1,6 @@
 /** Short listen-through for a single inspected media source (track / channel). */
 
-import { remuxMp4AudioTrackHead } from '$lib/media/mp4-audio';
+import { extractMp4AudioTrackHeads, remuxMp4AudioTrackHead } from '$lib/media/mp4-audio';
 import type { MediaSource } from '$lib/media/tracks';
 
 export type PreviewHandle = {
@@ -304,13 +304,24 @@ export async function previewMediaSource(
 
 	if (typeof source.trackId === 'number') {
 		const blob = await remuxMp4AudioTrackHead(file, source.trackId, PREVIEW_SEC);
-		if (!blob) {
-			if (ctx && ctx.state !== 'closed') void ctx.close().catch(() => undefined);
-			throw new Error(
-				`Could not isolate “${source.label}” for preview. This track may use an unsupported codec.`
-			);
+		if (blob) {
+			try {
+				return await playMediaElement(blob, ctx, onEnded);
+			} catch {
+				/* fall through to PCM decode */
+			}
 		}
-		return playMediaElement(blob, ctx, onEnded);
+
+		const extracted = await extractMp4AudioTrackHeads(file, PREVIEW_SEC, undefined, source.trackId);
+		const hit = extracted.find((e) => e.trackId === source.trackId);
+		if (hit) {
+			return playBuffer(hit.samples, hit.sampleRate, ctx, onEnded);
+		}
+
+		if (ctx && ctx.state !== 'closed') void ctx.close().catch(() => undefined);
+		throw new Error(
+			`Could not isolate “${source.label}” for preview. This track may use an unsupported codec.`
+		);
 	}
 
 	if (typeof source.channelIndex === 'number') {
