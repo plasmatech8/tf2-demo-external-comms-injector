@@ -7,7 +7,8 @@
 
 	let demoFile = $state<File | null>(null);
 	let mediaFile = $state<File | null>(null);
-	let offset = $state(0);
+	/** Seconds into the media until game start / GO (skip countdown before this). */
+	let mediaGameStart = $state(0);
 	let selectedPlayerId = $state('');
 	let selectedSources = $state<string[]>([]);
 	let notesOpen = $state(false);
@@ -128,7 +129,7 @@
 			[
 				`TF2 demo placeholder — ${outName}\n`,
 				`speaker=${selectedPlayer.name} (${selectedPlayer.steamId})\n`,
-				`offset=${offset}\n`,
+				`mediaGameStart=${mediaGameStart}\n`,
 				`sources=${selectedSources.join(',')}\n`,
 				`(mock output; no real processing)\n`
 			],
@@ -168,10 +169,8 @@
 				External Comms Audio Injection Tool
 			</p>
 			<p class="mt-4 max-w-md text-sm leading-relaxed text-[var(--color-muted)]">
-				Upload a demo file and external voice/video, set the offset so audio lines up with game
-				start, choose tracks, then generate a modified <span class="text-[var(--color-fg)]"
-					>.dem</span
-				>.
+				Upload a demo file and external voice/video, mark when the game starts in your recording,
+				choose tracks, then generate a modified <span class="text-[var(--color-fg)]">.dem</span>.
 			</p>
 		</header>
 
@@ -201,22 +200,21 @@
 			/>
 
 			<div class="flex flex-col gap-1.5">
-				<label for="offset" class="text-sm font-medium text-[var(--color-fg-strong)]">
-					Audio start offset in demo file (seconds)
+				<label for="media-game-start" class="text-sm font-medium text-[var(--color-fg-strong)]">
+					Game start in audio/video (seconds)
 				</label>
 				<input
-					id="offset"
+					id="media-game-start"
 					type="number"
 					min="0"
 					step="0.01"
-					bind:value={offset}
+					bind:value={mediaGameStart}
 					class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-fg-strong)]
 						focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
 				/>
 				<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-					Where injected audio begins in the demo file — usually game start / GO (countdown “0”),
-					not when the countdown starts saying “5”. Trim countdown from the media separately if
-					needed.
+					How far into your recording until the game actually starts (end of “5, 4, 3, 2, 1…” / GO).
+					Audio before this is skipped.
 				</p>
 			</div>
 
