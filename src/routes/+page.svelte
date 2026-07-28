@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { fade, slide } from 'svelte/transition';
 	import FileField from '$lib/components/FileField.svelte';
+	import Hint from '$lib/components/Hint.svelte';
 	import LoadingStatus from '$lib/components/LoadingStatus.svelte';
 	import { listDemoPlayers, type DemoPlayer } from '$lib/demo/players';
 	import { detectCountdownGameStart } from '$lib/media/countdown';
@@ -30,6 +31,7 @@
 
 	let countdownLoading = $state(false);
 	let countdownNote = $state<string | null>(null);
+	let countdownDetail = $state<string | null>(null);
 	let previewing = $state(false);
 	let previewHandle = $state<PreviewHandle | null>(null);
 
@@ -71,17 +73,21 @@
 	async function runCountdownDetect(file: File) {
 		countdownLoading = true;
 		countdownNote = null;
+		countdownDetail = null;
 		try {
 			const hit = await detectCountdownGameStart(file);
 			if (hit) {
 				mediaGameStart = hit.gameStartSec;
-				countdownNote = `Detected ~${hit.gameStartSec}s (${hit.confidence} confidence). ${hit.detail}`;
+				countdownNote = `~${hit.gameStartSec}s · ${hit.confidence}`;
+				countdownDetail = hit.detail;
 			} else {
-				countdownNote =
-					'No clear TF2 announcer 3-2-1 match in the first ~20s — set game start manually.';
+				countdownNote = 'No match — set manually';
+				countdownDetail =
+					'No clear TF2 announcer 3-2-1 match in the first ~20s. Enter game start by hand.';
 			}
 		} catch (e) {
-			countdownNote =
+			countdownNote = 'Detect failed — set manually';
+			countdownDetail =
 				e instanceof Error ? e.message : 'Countdown detection failed — set game start manually.';
 		} finally {
 			countdownLoading = false;
@@ -136,6 +142,7 @@
 		mediaError = null;
 		mediaGameStart = null;
 		countdownNote = null;
+		countdownDetail = null;
 		successMessage = null;
 		errorMessage = null;
 
@@ -155,7 +162,6 @@
 			mediaLoading = false;
 		}
 
-		// Best-effort countdown detect after tracks are listed.
 		void runCountdownDetect(file);
 	}
 
@@ -184,7 +190,6 @@
 		successMessage = null;
 		errorMessage = null;
 
-		// UI-only mock: no network upload yet. Real flow will convert → process → download.
 		await new Promise((r) => setTimeout(r, 1250));
 
 		const outName = downloadName(demoFile.name);
@@ -231,10 +236,6 @@
 			>
 				External Comms Audio Injection Tool
 			</p>
-			<p class="mt-4 max-w-md text-sm leading-relaxed text-[var(--color-muted)]">
-				Start with a demo file and an audio/video recording. Options for each appear after you pick
-				a file, then generate a modified <span class="text-[var(--color-fg)]">.dem</span>.
-			</p>
 		</header>
 
 		<form
@@ -260,9 +261,12 @@
 						class="ml-1 flex flex-col gap-1.5 border-l border-[var(--color-border)] pl-4"
 						transition:slide={{ duration: 160 }}
 					>
-						<label for="speaker" class="text-sm font-medium text-[var(--color-muted)]">
-							Speaker
-						</label>
+						<div class="inline-flex items-center gap-1.5">
+							<label for="speaker" class="text-sm font-medium text-[var(--color-muted)]">
+								Speaker
+							</label>
+							<Hint text="Who the injected voice belongs to in this demo." />
+						</div>
 
 						{#if playersLoading}
 							<LoadingStatus label="Reading players…" />
@@ -286,9 +290,6 @@
 									>
 								{/each}
 							</select>
-							<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-								Who the injected voice should belong to in this demo.
-							</p>
 						{/if}
 					</div>
 				{/if}
@@ -310,9 +311,14 @@
 						transition:slide={{ duration: 160 }}
 					>
 						<div class="flex flex-col gap-1.5">
-							<label for="media-game-start" class="text-sm font-medium text-[var(--color-muted)]">
-								Game start (seconds)
-							</label>
+							<div class="inline-flex items-center gap-1.5">
+								<label for="media-game-start" class="text-sm font-medium text-[var(--color-muted)]">
+									Game start (seconds)
+								</label>
+								<Hint
+									text="Seconds into the recording until GO / end of countdown. Earlier audio is skipped. Auto-matched from TF2 announcer lines."
+								/>
+							</div>
 							<input
 								id="media-game-start"
 								type="number"
@@ -328,20 +334,22 @@
 									focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]
 									{mediaFile && !gameStartValid ? 'border-red-400/50' : 'border-[var(--color-border)]'}"
 							/>
-							<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-								Seconds into this recording until GO / end of the countdown. Earlier audio is
-								skipped.
-							</p>
 
 							{#if countdownLoading}
-								<LoadingStatus label="Matching TF2 announcer countdown…" />
+								<LoadingStatus label="Matching countdown…" />
 							{:else if countdownNote}
-								<p class="text-xs leading-relaxed text-[var(--color-muted)]" role="status">
+								<p
+									class="inline-flex items-center gap-1.5 text-xs text-[var(--color-muted)]"
+									role="status"
+								>
 									{countdownNote}
+									{#if countdownDetail}
+										<Hint text={countdownDetail} label="Detection details" />
+									{/if}
 								</p>
 							{/if}
 
-							<div class="flex flex-wrap gap-2 pt-0.5">
+							<div class="flex flex-wrap items-center gap-2 pt-0.5">
 								<button
 									type="button"
 									class="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs tracking-wide text-[var(--color-fg)] uppercase
@@ -360,11 +368,10 @@
 								>
 									{previewing ? 'Stop preview' : 'Preview ±5s'}
 								</button>
+								<Hint
+									text="Preview plays 5s before/after game start with a loud 0.5s beep on the marker."
+								/>
 							</div>
-							<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-								Preview plays 5s before through 5s after game start, with a loud 0.5s monotone beep
-								on the marker.
-							</p>
 
 							{#if mediaFile && !gameStartValid && !countdownLoading}
 								<p class="text-xs text-red-300/90" role="alert">Enter when the game starts.</p>
@@ -372,8 +379,14 @@
 						</div>
 
 						<div class="flex flex-col gap-1.5">
-							<p class="text-sm font-medium text-[var(--color-muted)]" id="tracks-label">
+							<p
+								class="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--color-muted)]"
+								id="tracks-label"
+							>
 								{mediaInfo ? sourceLegend(mediaInfo) : 'Tracks'}
+								{#if mediaInfo?.summary}
+									<Hint text={mediaInfo.summary} label="Track details" />
+								{/if}
 							</p>
 
 							{#if mediaLoading}
@@ -407,7 +420,6 @@
 										</label>
 									{/each}
 								</div>
-								<p class="text-xs text-[var(--color-muted)]">{mediaInfo.summary}</p>
 							{/if}
 						</div>
 					</div>
@@ -430,9 +442,6 @@
 						Generate &amp; download
 					{/if}
 				</button>
-				<p class="mt-2 text-xs leading-relaxed text-[var(--color-muted)]">
-					Files stay in the browser for now. Generate is still a local mock.
-				</p>
 
 				{#if successMessage}
 					<p
@@ -467,7 +476,9 @@
 				class="mt-3 list-disc space-y-1 pl-4 text-xs leading-relaxed text-[var(--color-muted)]"
 				transition:slide={{ duration: 160 }}
 			>
-				<li>Generate currently mocks download only — no processing yet.</li>
+				<li>
+					Generate currently mocks download only — no processing yet. Files stay in the browser.
+				</li>
 				<li>
 					Countdown detect cross-correlates TF2 announcer begins_5…1sec WAVs (no speech
 					recognition). Verify with Preview.
