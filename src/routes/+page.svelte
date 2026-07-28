@@ -8,8 +8,8 @@
 
 	let demoFile = $state<File | null>(null);
 	let mediaFile = $state<File | null>(null);
-	/** Seconds into the media until game start / GO (skip countdown before this). */
-	let mediaGameStart = $state(0);
+	/** Seconds into the media until game start / GO. Empty until the user enters a value. */
+	let mediaGameStart = $state<number | null>(null);
 	let selectedPlayerId = $state('');
 	let selectedSources = $state<string[]>([]);
 	let notesOpen = $state(false);
@@ -77,6 +77,7 @@
 		mediaInfo = null;
 		selectedSources = [];
 		mediaError = null;
+		mediaGameStart = null;
 		successMessage = null;
 		errorMessage = null;
 
@@ -130,7 +131,7 @@
 			[
 				`TF2 demo placeholder — ${outName}\n`,
 				`speaker=${selectedPlayer.name} (${selectedPlayer.steamId})\n`,
-				`mediaGameStart=${mediaGameStart}\n`,
+				`mediaGameStart=${mediaGameStart ?? 0}\n`,
 				`sources=${selectedSources.join(',')}\n`,
 				`(mock output; no real processing)\n`
 			],
@@ -177,6 +178,7 @@
 
 		<form
 			class="flex flex-col gap-6"
+			autocomplete="off"
 			onsubmit={(e) => {
 				e.preventDefault();
 				void onGenerate();
@@ -251,8 +253,11 @@
 						type="number"
 						min="0"
 						step="0.01"
+						placeholder="e.g. 3"
+						autocomplete="off"
+						inputmode="decimal"
 						bind:value={mediaGameStart}
-						class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-fg-strong)]
+						class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-fg-strong)] placeholder:text-[var(--color-muted)]
 							focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
 					/>
 					<p class="text-xs leading-relaxed text-[var(--color-muted)]">
