@@ -100,7 +100,7 @@
 
 	function onGameStartInput(e: Event) {
 		const v = (e.currentTarget as HTMLInputElement).valueAsNumber;
-		mediaGameStart = Number.isFinite(v) ? v : null;
+		mediaGameStart = Number.isFinite(v) ? Math.round(v * 10) / 10 : null;
 	}
 
 	async function onPreview() {
