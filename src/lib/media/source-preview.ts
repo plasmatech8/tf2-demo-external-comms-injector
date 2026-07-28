@@ -7,7 +7,7 @@ export type PreviewHandle = {
 	stop: () => void;
 };
 
-const PREVIEW_SEC = 4;
+const PREVIEW_SEC = 8;
 
 function AudioCtx(): typeof AudioContext | undefined {
 	if (typeof AudioContext !== 'undefined') return AudioContext;
