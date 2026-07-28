@@ -4,6 +4,8 @@
 	import FileField from '$lib/components/FileField.svelte';
 	import LoadingStatus from '$lib/components/LoadingStatus.svelte';
 	import { listDemoPlayers, type DemoPlayer } from '$lib/demo/players';
+	import { detectCountdownGameStart } from '$lib/media/countdown';
+	import { previewAroundGameStart, type PreviewHandle } from '$lib/media/preview';
 	import { inspectMedia, type MediaInspection } from '$lib/media/tracks';
 
 	let demoFile = $state<File | null>(null);
@@ -25,6 +27,11 @@
 	let mediaInfo = $state<MediaInspection | null>(null);
 	let mediaLoading = $state(false);
 	let mediaError = $state<string | null>(null);
+
+	let countdownLoading = $state(false);
+	let countdownNote = $state<string | null>(null);
+	let previewing = $state(false);
+	let previewHandle = $state<PreviewHandle | null>(null);
 
 	const selectedPlayer = $derived(
 		players.find((p) => String(p.userId) === selectedPlayerId) ?? null
@@ -49,8 +56,51 @@
 		const id = requestAnimationFrame(() => {
 			ready = true;
 		});
-		return () => cancelAnimationFrame(id);
+		return () => {
+			cancelAnimationFrame(id);
+			previewHandle?.stop();
+		};
 	});
+
+	function stopPreview() {
+		previewHandle?.stop();
+		previewHandle = null;
+		previewing = false;
+	}
+
+	async function runCountdownDetect(file: File) {
+		countdownLoading = true;
+		countdownNote = null;
+		try {
+			const hit = await detectCountdownGameStart(file);
+			if (hit) {
+				mediaGameStart = hit.gameStartSec;
+				countdownNote = `Detected ~${hit.gameStartSec}s (${hit.confidence} confidence). ${hit.detail}`;
+			} else {
+				countdownNote = 'No clear 3-2-1 cadence found in the first ~30s — set game start manually.';
+			}
+		} catch (e) {
+			countdownNote =
+				e instanceof Error ? e.message : 'Countdown detection failed — set game start manually.';
+		} finally {
+			countdownLoading = false;
+		}
+	}
+
+	async function onPreview() {
+		if (!mediaFile || !gameStartValid || mediaGameStart === null) return;
+		stopPreview();
+		previewing = true;
+		try {
+			previewHandle = await previewAroundGameStart(mediaFile, mediaGameStart, () => {
+				previewing = false;
+				previewHandle = null;
+			});
+		} catch (e) {
+			previewing = false;
+			errorMessage = e instanceof Error ? e.message : 'Preview failed.';
+		}
+	}
 
 	async function setDemoFile(file: File | null) {
 		demoFile = file;
@@ -78,11 +128,13 @@
 	}
 
 	async function setMediaFile(file: File | null) {
+		stopPreview();
 		mediaFile = file;
 		mediaInfo = null;
 		selectedSources = [];
 		mediaError = null;
 		mediaGameStart = null;
+		countdownNote = null;
 		successMessage = null;
 		errorMessage = null;
 
@@ -101,6 +153,9 @@
 		} finally {
 			mediaLoading = false;
 		}
+
+		// Best-effort countdown detect after tracks are listed.
+		void runCountdownDetect(file);
 	}
 
 	function toggleSource(id: string) {
@@ -276,7 +331,41 @@
 								Seconds into this recording until GO / end of the countdown. Earlier audio is
 								skipped.
 							</p>
-							{#if mediaFile && !gameStartValid}
+
+							{#if countdownLoading}
+								<LoadingStatus label="Listening for 3…2…1…GO…" />
+							{:else if countdownNote}
+								<p class="text-xs leading-relaxed text-[var(--color-muted)]" role="status">
+									{countdownNote}
+								</p>
+							{/if}
+
+							<div class="flex flex-wrap gap-2 pt-0.5">
+								<button
+									type="button"
+									class="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs tracking-wide text-[var(--color-fg)] uppercase
+										hover:border-[var(--color-border-strong)] disabled:cursor-not-allowed disabled:opacity-40"
+									disabled={!mediaFile || countdownLoading}
+									onclick={() => mediaFile && void runCountdownDetect(mediaFile)}
+								>
+									Re-detect
+								</button>
+								<button
+									type="button"
+									class="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs tracking-wide text-[var(--color-fg)] uppercase
+										hover:border-[var(--color-border-strong)] disabled:cursor-not-allowed disabled:opacity-40"
+									disabled={!gameStartValid || !mediaFile}
+									onclick={() => (previewing ? stopPreview() : void onPreview())}
+								>
+									{previewing ? 'Stop preview' : 'Preview ±5s'}
+								</button>
+							</div>
+							<p class="text-xs leading-relaxed text-[var(--color-muted)]">
+								Preview plays 5s before through 5s after game start, with beeps on the marker.
+								Detection is a best-effort energy cadence heuristic (not full speech recognition).
+							</p>
+
+							{#if mediaFile && !gameStartValid && !countdownLoading}
 								<p class="text-xs text-red-300/90" role="alert">Enter when the game starts.</p>
 							{/if}
 						</div>
@@ -378,8 +467,8 @@
 				transition:slide={{ duration: 160 }}
 			>
 				<li>Generate currently mocks download only — no processing yet.</li>
+				<li>Countdown detect is a cadence/energy heuristic; verify with Preview ±5s.</li>
 				<li>Track inspect reads MP4 metadata in chunks (not the whole video).</li>
-				<li>Optional waveform / countdown helpers — deferred.</li>
 			</ul>
 		{/if}
 	</footer>
