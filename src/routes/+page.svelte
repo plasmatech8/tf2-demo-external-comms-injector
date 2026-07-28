@@ -11,8 +11,8 @@
 
 	let demoFile = $state<File | null>(null);
 	let mediaFile = $state<File | null>(null);
-	/** Seconds into the media until game start / GO. Empty until the user enters a value. */
-	let mediaGameStart = $state<number | null>(null);
+	/** Seconds into the media until game start / GO. Defaults to 5. */
+	let mediaGameStart = $state<number | null>(5);
 	let selectedPlayerId = $state('');
 	let selectedSources = $state<string[]>([]);
 	let notesOpen = $state(false);
