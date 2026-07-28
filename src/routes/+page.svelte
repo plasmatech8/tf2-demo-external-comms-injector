@@ -5,7 +5,7 @@
 	import Hint from '$lib/components/Hint.svelte';
 	import LoadingStatus from '$lib/components/LoadingStatus.svelte';
 	import { listDemoPlayers, type DemoPlayer } from '$lib/demo/players';
-	import { detectCountdownGameStart } from '$lib/media/countdown';
+	import { detectCountdownGameStart, primeAudioContext } from '$lib/media/countdown';
 	import { previewAroundGameStart, type PreviewHandle } from '$lib/media/preview';
 	import { inspectMedia, type MediaInspection } from '$lib/media/tracks';
 
@@ -30,6 +30,7 @@
 	let mediaError = $state<string | null>(null);
 
 	let countdownLoading = $state(false);
+	let countdownDone = $state(false);
 	let countdownNote = $state<string | null>(null);
 	let countdownDetail = $state<string | null>(null);
 	let previewing = $state(false);
@@ -41,6 +42,10 @@
 
 	const gameStartValid = $derived(
 		mediaGameStart !== null && Number.isFinite(mediaGameStart) && mediaGameStart >= 0
+	);
+
+	const showGameStartNeeded = $derived(
+		!!mediaFile && countdownDone && !countdownLoading && !gameStartValid
 	);
 
 	const canGenerate = $derived(
@@ -70,20 +75,20 @@
 		previewing = false;
 	}
 
-	async function runCountdownDetect(file: File) {
+	async function runCountdownDetect(file: File, primed: AudioContext | null = null) {
 		countdownLoading = true;
+		countdownDone = false;
 		countdownNote = null;
 		countdownDetail = null;
 		try {
-			const hit = await detectCountdownGameStart(file);
-			if (hit) {
+			const hit = await detectCountdownGameStart(file, primed);
+			if (hit.ok) {
 				mediaGameStart = hit.gameStartSec;
 				countdownNote = `~${hit.gameStartSec}s · ${hit.confidence}`;
 				countdownDetail = hit.detail;
 			} else {
 				countdownNote = 'Not found — set manually';
-				countdownDetail =
-					'No clear TF2 announcer 3-2-1 countdown in the first ~20s. Enter game start by hand.';
+				countdownDetail = hit.detail;
 			}
 		} catch (e) {
 			countdownNote = 'Detect failed — set manually';
@@ -91,7 +96,16 @@
 				e instanceof Error ? e.message : 'Countdown detection failed — set game start manually.';
 		} finally {
 			countdownLoading = false;
+			countdownDone = true;
+			if (primed && primed.state !== 'closed') {
+				void primed.close().catch(() => undefined);
+			}
 		}
+	}
+
+	function onGameStartInput(e: Event) {
+		const v = (e.currentTarget as HTMLInputElement).valueAsNumber;
+		mediaGameStart = Number.isFinite(v) ? v : null;
 	}
 
 	async function onPreview() {
@@ -143,12 +157,19 @@
 		mediaGameStart = null;
 		countdownNote = null;
 		countdownDetail = null;
+		countdownDone = false;
 		successMessage = null;
 		errorMessage = null;
 
 		if (!file) return;
 
+		// Unlock audio during the file-picker gesture so large MP4 head-capture can play().
+		const primed = primeAudioContext();
 		mediaLoading = true;
+		countdownLoading = true;
+
+		const detectPromise = runCountdownDetect(file, primed);
+
 		try {
 			const info = await inspectMedia(file);
 			mediaInfo = info;
@@ -162,7 +183,7 @@
 			mediaLoading = false;
 		}
 
-		void runCountdownDetect(file);
+		await detectPromise;
 	}
 
 	function toggleSource(id: string) {
@@ -328,11 +349,12 @@
 								placeholder="e.g. 3"
 								autocomplete="off"
 								inputmode="decimal"
-								bind:value={mediaGameStart}
-								aria-invalid={mediaFile !== null && !gameStartValid}
+								value={mediaGameStart ?? ''}
+								oninput={onGameStartInput}
+								aria-invalid={showGameStartNeeded}
 								class="w-full rounded border bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)] placeholder:text-[var(--color-muted)]
 									focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]
-									{mediaFile && !gameStartValid ? 'border-red-400/50' : 'border-[var(--color-border)]'}"
+									{showGameStartNeeded ? 'border-red-400/50' : 'border-[var(--color-border)]'}"
 							/>
 
 							{#if countdownLoading}
@@ -355,7 +377,10 @@
 									class="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs tracking-wide text-[var(--color-fg)] uppercase
 										hover:border-[var(--color-border-strong)] disabled:cursor-not-allowed disabled:opacity-40"
 									disabled={!mediaFile || countdownLoading}
-									onclick={() => mediaFile && void runCountdownDetect(mediaFile)}
+									onclick={() => {
+										if (!mediaFile) return;
+										void runCountdownDetect(mediaFile, primeAudioContext());
+									}}
 								>
 									Re-detect
 								</button>
@@ -373,7 +398,7 @@
 								/>
 							</div>
 
-							{#if mediaFile && !gameStartValid && !countdownLoading}
+							{#if showGameStartNeeded && !countdownNote}
 								<p class="text-xs text-red-300/90" role="alert">Enter when the game starts.</p>
 							{/if}
 						</div>

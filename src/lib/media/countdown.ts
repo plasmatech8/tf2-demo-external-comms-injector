@@ -9,6 +9,7 @@
  */
 
 export type CountdownDetection = {
+	ok: true;
 	gameStartSec: number;
 	/** Matched digit → media time of template onset. */
 	matches: Partial<Record<CountdownDigit, { time: number; score: number }>>;
@@ -17,19 +18,28 @@ export type CountdownDetection = {
 	detail: string;
 };
 
+export type CountdownMiss = {
+	ok: false;
+	detail: string;
+};
+
+export type CountdownResult = CountdownDetection | CountdownMiss;
+
 export type CountdownDigit = 1 | 2 | 3 | 4 | 5;
 
 const DIGITS: CountdownDigit[] = [5, 4, 3, 2, 1];
 const WORK_RATE = 12000;
 const ANALYZE_SEC = 20;
 const HOP_SEC = 0.02;
-const MIN_SCORE = 0.12;
-const PEAKS_PER_DIGIT = 6;
-const PEAK_SEP_SEC = 0.45;
-const INTERVAL_MIN = 0.7;
-const INTERVAL_MAX = 1.35;
+const MIN_SCORE = 0.08;
+const PEAKS_PER_DIGIT = 8;
+const PEAK_SEP_SEC = 0.4;
+const INTERVAL_MIN = 0.55;
+const INTERVAL_MAX = 1.5;
 /** Countdown sync is almost always in the opening seconds of a Medal clip. */
-const MAX_FIRST_DIGIT_SEC = 5.5;
+const MAX_FIRST_DIGIT_SEC = 8;
+/** Prefer streaming capture for video / large files (full decodeAudioData is too heavy). */
+const FULL_DECODE_MAX_BYTES = 24 * 1024 * 1024;
 
 /** "begins_1sec" means one second remains → fight/GO ≈ onset + 1s. */
 const ONE_TO_GO_SEC = 1;
@@ -49,6 +59,15 @@ declare global {
 	interface Window {
 		webkitAudioContext?: typeof AudioContext;
 	}
+}
+
+/** Call from a user-gesture handler so later media.play() / resume() still works. */
+export function primeAudioContext(): AudioContext | null {
+	const Ctor = AudioCtx();
+	if (!Ctor) return null;
+	const ctx = new Ctor();
+	void ctx.resume();
+	return ctx;
 }
 
 function downsample(mono: Float32Array, fromRate: number, toRate: number): Float32Array {
@@ -84,10 +103,11 @@ function voiceBandEmphasis(samples: Float32Array, sampleRate: number): Float32Ar
 	return out;
 }
 
-function mixToMono(
-	buffer: AudioBuffer,
-	maxSec: number
-): { samples: Float32Array; sampleRate: number } {
+function prepareSignal(samples: Float32Array, sampleRate: number): Float32Array {
+	return voiceBandEmphasis(downsample(samples, sampleRate, WORK_RATE), WORK_RATE);
+}
+
+function mixToMono(buffer: AudioBuffer, maxSec: number): Float32Array {
 	const rate = buffer.sampleRate;
 	const frames = Math.min(buffer.length, Math.floor(rate * maxSec));
 	const mono = new Float32Array(frames);
@@ -96,7 +116,18 @@ function mixToMono(
 		const data = buffer.getChannelData(c);
 		for (let i = 0; i < frames; i++) mono[i] += data[i] / ch;
 	}
-	return { samples: mono, sampleRate: rate };
+	return mono;
+}
+
+function channelSignals(buffer: AudioBuffer, maxSec: number): Float32Array[] {
+	const rate = buffer.sampleRate;
+	const frames = Math.min(buffer.length, Math.floor(rate * maxSec));
+	const out: Float32Array[] = [];
+	for (let c = 0; c < buffer.numberOfChannels; c++) {
+		const data = buffer.getChannelData(c);
+		out.push(data.subarray(0, frames));
+	}
+	return out;
 }
 
 async function decodeWavPcm(
@@ -165,23 +196,152 @@ async function decodeWavPcm(
 	return { samples, sampleRate };
 }
 
-async function decodeAudioFile(
+/**
+ * Capture the first `maxSec` of audio via an HTML media element.
+ * Avoids loading / decoding an entire Medal recording into memory.
+ */
+async function captureMediaHead(
 	file: File,
-	maxSec = ANALYZE_SEC
+	maxSec: number,
+	primed: AudioContext | null
 ): Promise<{ samples: Float32Array; sampleRate: number }> {
+	const Ctor = AudioCtx();
+	if (!Ctor || typeof document === 'undefined') {
+		throw new Error('Web Audio is required for countdown detection.');
+	}
+
+	const url = URL.createObjectURL(file);
+	const isVideo = file.type.startsWith('video/') || /\.mp4$/i.test(file.name);
+	const media = document.createElement(isVideo ? 'video' : 'audio') as
+		HTMLVideoElement | HTMLAudioElement;
+	media.src = url;
+	media.preload = 'auto';
+	media.controls = false;
+	// Route through Web Audio (gain 0) instead of element mute — muted can yield silence to the graph.
+	media.muted = false;
+	media.volume = 1;
+	if ('playsInline' in media) (media as HTMLVideoElement).playsInline = true;
+
+	const ownsContext = !(primed && primed.state !== 'closed');
+	const ctx = ownsContext ? new Ctor() : primed!;
+
+	try {
+		await new Promise<void>((resolve, reject) => {
+			media.onloadedmetadata = () => resolve();
+			media.onerror = () => reject(new Error('Could not load media for countdown detection.'));
+		});
+
+		if (ctx.state === 'suspended') await ctx.resume();
+
+		const sampleRate = ctx.sampleRate;
+		const limitSec = Math.min(maxSec, Number.isFinite(media.duration) ? media.duration : maxSec);
+		const total = Math.max(1, Math.floor(sampleRate * limitSec));
+		const mono = new Float32Array(total);
+		let written = 0;
+
+		const source = ctx.createMediaElementSource(media);
+		const processor = ctx.createScriptProcessor(4096, 2, 1);
+		const mute = ctx.createGain();
+		mute.gain.value = 0;
+
+		await new Promise<void>((resolve, reject) => {
+			const timeoutMs = Math.max(20_000, limitSec * 1000 + 8_000);
+			const timeout = window.setTimeout(() => {
+				finish();
+				reject(new Error('Timed out while reading audio for countdown detection.'));
+			}, timeoutMs);
+
+			const finish = () => {
+				window.clearTimeout(timeout);
+				processor.onaudioprocess = null;
+				try {
+					processor.disconnect();
+				} catch {
+					/* already disconnected */
+				}
+				try {
+					source.disconnect();
+				} catch {
+					/* already disconnected */
+				}
+				try {
+					mute.disconnect();
+				} catch {
+					/* already disconnected */
+				}
+				media.pause();
+			};
+
+			processor.onaudioprocess = (ev) => {
+				const input = ev.inputBuffer;
+				const n = input.length;
+				const ch = input.numberOfChannels;
+				for (let i = 0; i < n && written < total; i++) {
+					let sum = 0;
+					for (let c = 0; c < ch; c++) sum += input.getChannelData(c)[i];
+					mono[written++] = sum / ch;
+				}
+				if (written >= total || media.ended) {
+					finish();
+					resolve();
+				}
+			};
+
+			source.connect(processor);
+			processor.connect(mute);
+			mute.connect(ctx.destination);
+
+			media.currentTime = 0;
+			void media.play().catch((err) => {
+				finish();
+				reject(
+					err instanceof Error ? err : new Error('Could not play media for countdown detection.')
+				);
+			});
+		});
+
+		if (written < sampleRate * 0.4) {
+			throw new Error('Captured too little audio for countdown detection.');
+		}
+
+		return { samples: mono.subarray(0, written), sampleRate };
+	} finally {
+		URL.revokeObjectURL(url);
+		media.removeAttribute('src');
+		media.load();
+		if (ownsContext) await ctx.close().catch(() => undefined);
+	}
+}
+
+async function decodeAudioCandidates(
+	file: File,
+	maxSec: number,
+	primed: AudioContext | null
+): Promise<{ signals: Float32Array[]; sampleRate: number }> {
 	if (file.type.includes('wav') || file.name.toLowerCase().endsWith('.wav')) {
 		const wav = await decodeWavPcm(await file.arrayBuffer(), maxSec);
-		if (wav) return wav;
+		if (wav) return { signals: [wav.samples], sampleRate: wav.sampleRate };
+	}
+
+	const isVideo = file.type.startsWith('video/') || /\.(mp4|webm|mov|mkv)$/i.test(file.name);
+	const useCapture = isVideo || file.size > FULL_DECODE_MAX_BYTES;
+
+	if (useCapture) {
+		const head = await captureMediaHead(file, maxSec, primed);
+		return { signals: [head.samples], sampleRate: head.sampleRate };
 	}
 
 	const Ctor = AudioCtx();
 	if (!Ctor) throw new Error('Web Audio is required for countdown detection.');
-	const ctx = new Ctor();
+	const ctx = primed && primed.state !== 'closed' ? primed : new Ctor();
+	const owns = ctx !== primed;
 	try {
+		if (ctx.state === 'suspended') await ctx.resume();
 		const audio = await ctx.decodeAudioData(await file.arrayBuffer());
-		return mixToMono(audio, maxSec);
+		const signals = [mixToMono(audio, maxSec), ...channelSignals(audio, maxSec)];
+		return { signals, sampleRate: audio.sampleRate };
 	} finally {
-		await ctx.close().catch(() => undefined);
+		if (owns) await ctx.close().catch(() => undefined);
 	}
 }
 
@@ -193,10 +353,9 @@ async function loadTemplates(): Promise<Template[]> {
 		if (!res.ok) throw new Error(`Missing countdown template ${url}`);
 		const decoded = await decodeWavPcm(await res.arrayBuffer(), 5);
 		if (!decoded) throw new Error(`Could not decode template ${url}`);
-		const down = downsample(decoded.samples, decoded.sampleRate, WORK_RATE);
 		out.push({
 			digit,
-			samples: voiceBandEmphasis(down, WORK_RATE)
+			samples: prepareSignal(decoded.samples, decoded.sampleRate)
 		});
 	}
 	return out;
@@ -240,7 +399,6 @@ function templatePeaks(
 	const kept: Match[] = [];
 	for (const p of raw) {
 		if (kept.every((k) => Math.abs(k.time - p.time) >= PEAK_SEP_SEC)) {
-			// Local 1-sample refine around hop grid
 			const center = Math.round(p.time * sampleRate);
 			let bestScore = p.score;
 			let bestIndex = center;
@@ -271,7 +429,7 @@ function templatePeaks(
 
 function pickSequence(
 	candidates: Match[]
-): { chosen: Match[]; confidence: CountdownDetection['confidence'] } | null {
+): { chosen: Match[]; confidence: CountdownDetection['confidence']; score: number } | null {
 	const byDigit = new Map<CountdownDigit, Match[]>();
 	for (const m of candidates) {
 		const list = byDigit.get(m.digit) ?? [];
@@ -316,7 +474,7 @@ function pickSequence(
 			const confidence: CountdownDetection['confidence'] =
 				chosen.length >= 4 && minScore >= 0.28
 					? 'high'
-					: chosen.length >= 3 && minScore >= 0.18
+					: chosen.length >= 3 && minScore >= 0.15
 						? 'medium'
 						: 'low';
 
@@ -338,37 +496,31 @@ function pickSequence(
 
 	if (ranked.length === 0) return null;
 	ranked.sort((a, b) => b.score - a.score);
-	return { chosen: ranked[0].chosen, confidence: ranked[0].confidence };
+	return { chosen: ranked[0].chosen, confidence: ranked[0].confidence, score: ranked[0].score };
+}
+
+function summarizePeaks(candidates: Match[]): string {
+	if (candidates.length === 0) return 'No announcer-like peaks in the first ~20s.';
+	const best = [...candidates].sort((a, b) => b.score - a.score).slice(0, 5);
+	return `Closest peaks: ${best.map((m) => `${m.digit}@${m.time.toFixed(2)}s(${m.score.toFixed(2)})`).join(', ')}.`;
 }
 
 let templatesPromise: Promise<Template[]> | null = null;
 
 function getTemplates(): Promise<Template[]> {
-	if (!templatesPromise) templatesPromise = loadTemplates();
+	if (!templatesPromise) {
+		templatesPromise = loadTemplates().catch((err) => {
+			templatesPromise = null;
+			throw err;
+		});
+	}
 	return templatesPromise;
 }
 
-/**
- * Match TF2 announcer 5…1 lines against the media waveform and estimate GO time.
- */
-export async function detectCountdownGameStart(file: File): Promise<CountdownDetection | null> {
-	const templates = await getTemplates();
-	const decoded = await decodeAudioFile(file, ANALYZE_SEC);
-	const signal = voiceBandEmphasis(
-		downsample(decoded.samples, decoded.sampleRate, WORK_RATE),
-		WORK_RATE
-	);
-
-	const candidates: Match[] = [];
-	for (const t of templates) {
-		candidates.push(...templatePeaks(signal, t.samples, WORK_RATE, t.digit));
-	}
-
-	const seq = pickSequence(candidates);
-	if (!seq) {
-		return null;
-	}
-
+function detectionFromSequence(seq: {
+	chosen: Match[];
+	confidence: CountdownDetection['confidence'];
+}): CountdownDetection {
 	const byDigit: CountdownDetection['matches'] = {};
 	for (const m of seq.chosen) byDigit[m.digit] = { time: m.time, score: m.score };
 
@@ -389,13 +541,53 @@ export async function detectCountdownGameStart(file: File): Promise<CountdownDet
 	}
 
 	gameStartSec = Math.round(gameStartSec * 100) / 100;
-
 	const label = seq.chosen.map((m) => `${m.digit}@${m.time.toFixed(2)}s`).join(' → ');
+
 	return {
+		ok: true,
 		gameStartSec,
 		matches: byDigit,
 		confidence: seq.confidence,
 		method: 'template',
 		detail: `Found announcer ${label}.`
 	};
+}
+
+/**
+ * Match TF2 announcer 5…1 lines against the media waveform and estimate GO time.
+ * Pass a primed AudioContext from the file-picker gesture when available.
+ */
+export async function detectCountdownGameStart(
+	file: File,
+	primed: AudioContext | null = null
+): Promise<CountdownResult> {
+	const templates = await getTemplates();
+	const { signals, sampleRate } = await decodeAudioCandidates(file, ANALYZE_SEC, primed);
+
+	let best: {
+		chosen: Match[];
+		confidence: CountdownDetection['confidence'];
+		score: number;
+	} | null = null;
+	let allPeaks: Match[] = [];
+
+	for (const raw of signals) {
+		const signal = prepareSignal(raw, sampleRate);
+		const candidates: Match[] = [];
+		for (const t of templates) {
+			candidates.push(...templatePeaks(signal, t.samples, WORK_RATE, t.digit));
+		}
+		allPeaks = allPeaks.concat(candidates);
+		const seq = pickSequence(candidates);
+		if (seq && (!best || seq.score > best.score)) best = seq;
+	}
+
+	if (!best) {
+		return {
+			ok: false,
+			detail: `No clear TF2 announcer 3-2-1 countdown in the first ~20s. ${summarizePeaks(allPeaks)}`
+		};
+	}
+
+	return detectionFromSequence(best);
 }
