@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { fade, slide } from 'svelte/transition';
 	import FileField from '$lib/components/FileField.svelte';
+	import LoadingStatus from '$lib/components/LoadingStatus.svelte';
 	import { listDemoPlayers, type DemoPlayer } from '$lib/demo/players';
 	import { inspectMedia, type MediaInspection } from '$lib/media/tracks';
 
@@ -121,7 +122,7 @@
 		successMessage = null;
 		errorMessage = null;
 
-		// UI-only mock: no network upload yet. Real flow will convert → upload → process → download.
+		// UI-only mock: no network upload yet. Real flow will convert → process → download.
 		await new Promise((r) => setTimeout(r, 1250));
 
 		const outName = downloadName(demoFile.name);
@@ -181,133 +182,129 @@
 				void onGenerate();
 			}}
 		>
-			<FileField
-				id="demo-file"
-				label="Demo file"
-				accept=".dem,application/octet-stream"
-				helper="Team Fortress 2 .dem recording. Players are read in the browser when you select the file."
-				file={demoFile}
-				onchange={(f) => void setDemoFile(f)}
-			/>
-
-			<FileField
-				id="media-file"
-				label="Audio / video"
-				accept="video/mp4,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/flac,audio/x-m4a,.mp3,.wav,.ogg,.webm,.flac,.m4a,.mp4"
-				helper="Tracks/channels are inspected locally. Conversion to 24 kHz mono will happen client-side before upload."
-				file={mediaFile}
-				onchange={(f) => void setMediaFile(f)}
-			/>
-
-			<div class="flex flex-col gap-1.5">
-				<label for="media-game-start" class="text-sm font-medium text-[var(--color-fg-strong)]">
-					Game start in audio/video (seconds)
-				</label>
-				<input
-					id="media-game-start"
-					type="number"
-					min="0"
-					step="0.01"
-					bind:value={mediaGameStart}
-					class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-fg-strong)]
-						focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
+			<section class="flex flex-col gap-4">
+				<FileField
+					id="demo-file"
+					label="Demo file"
+					accept=".dem,application/octet-stream"
+					helper="Team Fortress 2 .dem recording. Players are read in the browser when you select the file."
+					file={demoFile}
+					onchange={(f) => void setDemoFile(f)}
 				/>
-				<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-					How far into your recording until the game actually starts (end of “5, 4, 3, 2, 1…” / GO).
-					Audio before this is skipped.
-				</p>
-			</div>
 
-			<fieldset class="flex flex-col gap-1.5">
-				<legend class="text-sm font-medium text-[var(--color-fg-strong)]">
-					{mediaInfo ? sourceLegend(mediaInfo) : 'Audio channels / tracks'}
-				</legend>
+				<div class="flex flex-col gap-1.5">
+					<label for="speaker" class="text-sm font-medium text-[var(--color-fg-strong)]">
+						Speaker / player attribution
+					</label>
 
-				{#if mediaLoading}
-					<p
-						class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-[var(--color-muted)]"
-					>
-						Inspecting media…
-					</p>
-				{:else if mediaError}
-					<p
-						class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
-						role="alert"
-					>
-						{mediaError}
-					</p>
-				{:else if mediaInfo && mediaInfo.sources.length > 0}
-					<div
-						class="flex flex-col gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
-						transition:fade={{ duration: 180 }}
-					>
-						{#each mediaInfo.sources as source (source.id)}
-							<label
-								class="flex cursor-pointer items-center gap-2.5 py-1.5 text-sm text-[var(--color-fg)]"
-							>
-								<input
-									type="checkbox"
-									checked={selectedSources.includes(source.id)}
-									onchange={() => toggleSource(source.id)}
-									class="rounded border-[var(--color-border-strong)] bg-[var(--color-surface-1)] text-[var(--color-accent)]
-										focus:ring-[var(--color-accent)]"
-								/>
-								<span>{source.label}</span>
-							</label>
-						{/each}
-					</div>
-					<p class="text-xs text-[var(--color-muted)]">{mediaInfo.summary}</p>
-				{:else}
-					<p
-						class="rounded border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-[var(--color-muted)]"
-					>
-						Select a media file to list available tracks or channels.
-					</p>
-				{/if}
-			</fieldset>
+					{#if playersLoading}
+						<LoadingStatus label="Reading players…" />
+					{:else if playersError}
+						<p
+							class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
+							role="alert"
+						>
+							{playersError}
+						</p>
+					{:else if players.length > 0}
+						<select
+							id="speaker"
+							bind:value={selectedPlayerId}
+							class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-fg-strong)]
+								focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
+						>
+							{#each players as player (player.userId)}
+								<option value={String(player.userId)}
+									>{playerLabel(player)} — {player.steamId}</option
+								>
+							{/each}
+						</select>
+						<p class="text-xs leading-relaxed text-[var(--color-muted)]">
+							From this demo file’s userinfo. Injected voice is attributed to the selected player.
+						</p>
+					{:else}
+						<p
+							class="rounded border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-[var(--color-muted)]"
+						>
+							Select a demo file to load players.
+						</p>
+					{/if}
+				</div>
+			</section>
 
-			<div class="flex flex-col gap-1.5">
-				<label for="speaker" class="text-sm font-medium text-[var(--color-fg-strong)]">
-					Speaker / player attribution
-				</label>
+			<section class="flex flex-col gap-4">
+				<FileField
+					id="media-file"
+					label="Audio / video"
+					accept="video/mp4,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/flac,audio/x-m4a,.mp3,.wav,.ogg,.webm,.flac,.m4a,.mp4"
+					helper="Tracks/channels are inspected locally from file metadata (not a full decode)."
+					file={mediaFile}
+					onchange={(f) => void setMediaFile(f)}
+				/>
 
-				{#if playersLoading}
-					<p
-						class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-[var(--color-muted)]"
-					>
-						Reading players from demo file…
-					</p>
-				{:else if playersError}
-					<p
-						class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
-						role="alert"
-					>
-						{playersError}
-					</p>
-				{:else if players.length > 0}
-					<select
-						id="speaker"
-						bind:value={selectedPlayerId}
+				<div class="flex flex-col gap-1.5">
+					<label for="media-game-start" class="text-sm font-medium text-[var(--color-fg-strong)]">
+						Game start in audio/video (seconds)
+					</label>
+					<input
+						id="media-game-start"
+						type="number"
+						min="0"
+						step="0.01"
+						bind:value={mediaGameStart}
 						class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-fg-strong)]
 							focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
-					>
-						{#each players as player (player.userId)}
-							<option value={String(player.userId)}>{playerLabel(player)} — {player.steamId}</option
-							>
-						{/each}
-					</select>
+					/>
 					<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-						Players parsed from the demo file’s userinfo. Voice will be attributed to the selected
-						player.
+						How far into your recording until the game actually starts (end of “5, 4, 3, 2, 1…” /
+						GO). Audio before this is skipped.
 					</p>
-				{:else}
-					<p
-						class="rounded border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-[var(--color-muted)]"
-					>
-						Select a demo file to load players.
-					</p>
-				{/if}
-			</div>
+				</div>
+
+				<fieldset class="flex flex-col gap-1.5">
+					<legend class="text-sm font-medium text-[var(--color-fg-strong)]">
+						{mediaInfo ? sourceLegend(mediaInfo) : 'Audio channels / tracks'}
+					</legend>
+
+					{#if mediaLoading}
+						<LoadingStatus label="Reading tracks…" />
+					{:else if mediaError}
+						<p
+							class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
+							role="alert"
+						>
+							{mediaError}
+						</p>
+					{:else if mediaInfo && mediaInfo.sources.length > 0}
+						<div
+							class="flex flex-col gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+							transition:fade={{ duration: 180 }}
+						>
+							{#each mediaInfo.sources as source (source.id)}
+								<label
+									class="flex cursor-pointer items-center gap-2.5 py-1.5 text-sm text-[var(--color-fg)]"
+								>
+									<input
+										type="checkbox"
+										checked={selectedSources.includes(source.id)}
+										onchange={() => toggleSource(source.id)}
+										class="rounded border-[var(--color-border-strong)] bg-[var(--color-surface-1)] text-[var(--color-accent)]
+											focus:ring-[var(--color-accent)]"
+									/>
+									<span>{source.label}</span>
+								</label>
+							{/each}
+						</div>
+						<p class="text-xs text-[var(--color-muted)]">{mediaInfo.summary}</p>
+					{:else}
+						<p
+							class="rounded border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-[var(--color-muted)]"
+						>
+							Select a media file to list available tracks or channels.
+						</p>
+					{/if}
+				</fieldset>
+			</section>
 
 			<div class="pt-1">
 				<button
@@ -327,7 +324,7 @@
 				</button>
 				<p class="mt-2 text-xs leading-relaxed text-[var(--color-muted)]">
 					Nothing is uploaded yet — files stay in the browser. The real flow will convert selected
-					audio, upload on Generate, process on the worker, then download.
+					audio, process locally (or on a worker), then download.
 				</p>
 
 				{#if successMessage}
@@ -363,8 +360,8 @@
 				class="mt-3 list-disc space-y-1 pl-4 text-xs leading-relaxed text-[var(--color-muted)]"
 				transition:slide={{ duration: 160 }}
 			>
-				<li>Generate currently mocks download only — no worker upload/processing yet.</li>
-				<li>Target encode path: 24 kHz mono (WAV intermediate → Opus in injector).</li>
+				<li>Generate currently mocks download only — no processing yet.</li>
+				<li>Track inspect reads MP4 metadata in chunks (not the whole video).</li>
 				<li>Optional waveform / countdown helpers — deferred.</li>
 			</ul>
 		{/if}
