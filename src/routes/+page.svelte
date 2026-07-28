@@ -30,11 +30,16 @@
 		players.find((p) => String(p.userId) === selectedPlayerId) ?? null
 	);
 
+	const gameStartValid = $derived(
+		mediaGameStart !== null && Number.isFinite(mediaGameStart) && mediaGameStart >= 0
+	);
+
 	const canGenerate = $derived(
 		!!demoFile &&
 			!!mediaFile &&
 			!!selectedPlayer &&
 			selectedSources.length > 0 &&
+			gameStartValid &&
 			!generating &&
 			!playersLoading &&
 			!mediaLoading
@@ -117,7 +122,7 @@
 	}
 
 	async function onGenerate() {
-		if (!canGenerate || !demoFile || !mediaFile || !selectedPlayer) return;
+		if (!canGenerate || !demoFile || !mediaFile || !selectedPlayer || !gameStartValid) return;
 
 		generating = true;
 		successMessage = null;
@@ -131,7 +136,7 @@
 			[
 				`TF2 demo placeholder — ${outName}\n`,
 				`speaker=${selectedPlayer.name} (${selectedPlayer.steamId})\n`,
-				`mediaGameStart=${mediaGameStart ?? 0}\n`,
+				`mediaGameStart=${mediaGameStart}\n`,
 				`sources=${selectedSources.join(',')}\n`,
 				`(mock output; no real processing)\n`
 			],
@@ -257,17 +262,23 @@
 								type="number"
 								min="0"
 								step="0.01"
+								required
 								placeholder="e.g. 3"
 								autocomplete="off"
 								inputmode="decimal"
 								bind:value={mediaGameStart}
-								class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)] placeholder:text-[var(--color-muted)]
-									focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
+								aria-invalid={mediaFile !== null && !gameStartValid}
+								class="w-full rounded border bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)] placeholder:text-[var(--color-muted)]
+									focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]
+									{mediaFile && !gameStartValid ? 'border-red-400/50' : 'border-[var(--color-border)]'}"
 							/>
 							<p class="text-xs leading-relaxed text-[var(--color-muted)]">
 								Seconds into this recording until GO / end of the countdown. Earlier audio is
 								skipped.
 							</p>
+							{#if mediaFile && !gameStartValid}
+								<p class="text-xs text-red-300/90" role="alert">Enter when the game starts.</p>
+							{/if}
 						</div>
 
 						<div class="flex flex-col gap-1.5">
