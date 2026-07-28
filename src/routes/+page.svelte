@@ -151,7 +151,7 @@
 		mediaInfo = null;
 		selectedSources = [];
 		mediaError = null;
-		mediaGameStart = null;
+		mediaGameStart = file ? 5 : null;
 		successMessage = null;
 		errorMessage = null;
 
