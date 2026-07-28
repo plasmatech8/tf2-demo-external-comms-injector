@@ -81,9 +81,9 @@
 				countdownNote = `~${hit.gameStartSec}s · ${hit.confidence}`;
 				countdownDetail = hit.detail;
 			} else {
-				countdownNote = 'No match — set manually';
+				countdownNote = 'Not found — set manually';
 				countdownDetail =
-					'No clear TF2 announcer 3-2-1 match in the first ~20s. Enter game start by hand.';
+					'No clear TF2 announcer 3-2-1 countdown in the first ~20s. Enter game start by hand.';
 			}
 		} catch (e) {
 			countdownNote = 'Detect failed — set manually';
@@ -316,7 +316,7 @@
 									Game start (seconds)
 								</label>
 								<Hint
-									text="Seconds into the recording until GO / end of countdown. Earlier audio is skipped. Auto-matched from TF2 announcer lines."
+									text="Seconds into the recording until GO / end of countdown. Earlier audio is skipped. Auto-detected from TF2 announcer lines."
 								/>
 							</div>
 							<input
@@ -336,7 +336,7 @@
 							/>
 
 							{#if countdownLoading}
-								<LoadingStatus label="Matching countdown…" />
+								<LoadingStatus label="Detecting countdown…" />
 							{:else if countdownNote}
 								<p
 									class="inline-flex items-center gap-1.5 text-xs text-[var(--color-muted)]"

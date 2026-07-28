@@ -396,6 +396,6 @@ export async function detectCountdownGameStart(file: File): Promise<CountdownDet
 		matches: byDigit,
 		confidence: seq.confidence,
 		method: 'template',
-		detail: `Matched announcer ${label}.`
+		detail: `Found announcer ${label}.`
 	};
 }
