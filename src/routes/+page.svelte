@@ -6,7 +6,7 @@
 	import LoadingStatus from '$lib/components/LoadingStatus.svelte';
 	import { listDemoPlayers, type DemoPlayer } from '$lib/demo/players';
 	import { previewAroundGameStart, type PreviewHandle } from '$lib/media/preview';
-	import { previewMediaSource } from '$lib/media/source-preview';
+	import { previewMediaSource, primeAudioContext } from '$lib/media/source-preview';
 	import { inspectMedia, type MediaInspection, type MediaSource } from '$lib/media/tracks';
 
 	let demoFile = $state<File | null>(null);
@@ -32,6 +32,7 @@
 	let previewing = $state(false);
 	let previewHandle = $state<PreviewHandle | null>(null);
 	let sourcePreviewId = $state<string | null>(null);
+	let sourcePreviewLoadingId = $state<string | null>(null);
 	let sourcePreviewHandle = $state<PreviewHandle | null>(null);
 
 	const selectedPlayer = $derived(
@@ -76,24 +77,36 @@
 		sourcePreviewHandle?.stop();
 		sourcePreviewHandle = null;
 		sourcePreviewId = null;
+		sourcePreviewLoadingId = null;
 	}
 
 	async function onSourcePreview(source: MediaSource) {
 		if (!mediaFile) return;
-		if (sourcePreviewId === source.id) {
+		if (sourcePreviewId === source.id || sourcePreviewLoadingId === source.id) {
 			stopSourcePreview();
 			return;
 		}
 		stopPreview();
 		stopSourcePreview();
-		sourcePreviewId = source.id;
+		sourcePreviewLoadingId = source.id;
+		const primed = primeAudioContext();
 		try {
-			sourcePreviewHandle = await previewMediaSource(mediaFile, source, () => {
-				sourcePreviewHandle = null;
-				sourcePreviewId = null;
-			});
+			sourcePreviewHandle = await previewMediaSource(
+				mediaFile,
+				source,
+				() => {
+					sourcePreviewHandle = null;
+					sourcePreviewId = null;
+					sourcePreviewLoadingId = null;
+				},
+				primed
+			);
+			sourcePreviewId = source.id;
+			sourcePreviewLoadingId = null;
 		} catch (e) {
+			sourcePreviewLoadingId = null;
 			sourcePreviewId = null;
+			if (primed && primed.state !== 'closed') void primed.close().catch(() => undefined);
 			errorMessage = e instanceof Error ? e.message : 'Track preview failed.';
 		}
 	}
@@ -410,13 +423,19 @@
 											<button
 												type="button"
 												class="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[10px] tracking-wide text-[var(--color-muted)] uppercase
-													hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]"
+													hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)] disabled:cursor-not-allowed disabled:opacity-40"
 												aria-label={sourcePreviewId === source.id
 													? `Stop preview of ${source.label}`
 													: `Preview ${source.label}`}
+												disabled={sourcePreviewLoadingId !== null &&
+													sourcePreviewLoadingId !== source.id}
 												onclick={() => void onSourcePreview(source)}
 											>
-												{sourcePreviewId === source.id ? 'Stop' : 'Play'}
+												{sourcePreviewLoadingId === source.id
+													? '…'
+													: sourcePreviewId === source.id
+														? 'Stop'
+														: 'Play'}
 											</button>
 										</div>
 									{/each}

@@ -21,16 +21,27 @@ declare global {
 	}
 }
 
+/** Call from the Play click so later decode/play still has an unlocked context. */
+export function primeAudioContext(): AudioContext | null {
+	const Ctor = AudioCtx();
+	if (!Ctor) return null;
+	const ctx = new Ctor();
+	void ctx.resume();
+	return ctx;
+}
+
 function playBuffer(
 	samples: Float32Array,
 	sampleRate: number,
+	primed: AudioContext | null,
 	onEnded?: () => void
 ): PreviewHandle {
 	const Ctor = AudioCtx();
 	if (!Ctor) throw new Error('Web Audio is required for track preview.');
-	const ctx = new Ctor();
+	const owns = !(primed && primed.state !== 'closed');
+	const ctx = owns ? new Ctor() : primed!;
 	const frames = Math.min(samples.length, Math.floor(sampleRate * PREVIEW_SEC));
-	const buffer = ctx.createBuffer(1, frames, sampleRate);
+	const buffer = ctx.createBuffer(1, Math.max(1, frames), sampleRate);
 	buffer.getChannelData(0).set(samples.subarray(0, frames));
 	const src = ctx.createBufferSource();
 	src.buffer = buffer;
@@ -46,46 +57,44 @@ function playBuffer(
 			/* already stopped */
 		}
 		src.disconnect();
-		void ctx.close().catch(() => undefined);
+		if (owns || primed === ctx) void ctx.close().catch(() => undefined);
 		onEnded?.();
 	};
 
 	src.onended = () => stop();
-	void ctx.resume().then(() => src.start());
+	void ctx.resume().then(() => {
+		if (!stopped) src.start();
+	});
 	return { stop };
 }
 
-async function decodeFileHead(file: File): Promise<{ buffer: AudioBuffer; ctx: AudioContext }> {
+async function decodeFileHead(file: File): Promise<AudioBuffer> {
 	const Ctor = AudioCtx();
 	if (!Ctor) throw new Error('Web Audio is required for track preview.');
 	const ctx = new Ctor();
 	try {
-		const audio = await ctx.decodeAudioData(await file.arrayBuffer());
-		return { buffer: audio, ctx };
-	} catch (e) {
+		return await ctx.decodeAudioData(await file.arrayBuffer());
+	} finally {
 		await ctx.close().catch(() => undefined);
-		throw e instanceof Error ? e : new Error('Could not decode audio for preview.');
 	}
 }
 
 function playAudioBufferChannel(
 	audio: AudioBuffer,
-	channelIndex: number | undefined,
-	ctx: AudioContext,
+	channelIndex: number,
+	primed: AudioContext | null,
 	onEnded?: () => void
 ): PreviewHandle {
-	const frames = Math.min(audio.length, Math.floor(audio.sampleRate * PREVIEW_SEC));
-	const out = ctx.createBuffer(1, frames, audio.sampleRate);
-	if (typeof channelIndex === 'number' && channelIndex < audio.numberOfChannels) {
-		out.copyToChannel(audio.getChannelData(channelIndex).subarray(0, frames), 0);
-	} else {
-		const mixed = out.getChannelData(0);
-		const ch = audio.numberOfChannels;
-		for (let c = 0; c < ch; c++) {
-			const data = audio.getChannelData(c);
-			for (let i = 0; i < frames; i++) mixed[i] += data[i] / ch;
-		}
+	if (channelIndex < 0 || channelIndex >= audio.numberOfChannels) {
+		throw new Error('That audio channel is not available in this file.');
 	}
+	const Ctor = AudioCtx();
+	if (!Ctor) throw new Error('Web Audio is required for track preview.');
+	const owns = !(primed && primed.state !== 'closed');
+	const ctx = owns ? new Ctor() : primed!;
+	const frames = Math.min(audio.length, Math.floor(audio.sampleRate * PREVIEW_SEC));
+	const out = ctx.createBuffer(1, Math.max(1, frames), audio.sampleRate);
+	out.getChannelData(0).set(audio.getChannelData(channelIndex).subarray(0, frames));
 
 	const src = ctx.createBufferSource();
 	src.buffer = out;
@@ -101,16 +110,22 @@ function playAudioBufferChannel(
 			/* already stopped */
 		}
 		src.disconnect();
-		void ctx.close().catch(() => undefined);
+		if (owns || primed === ctx) void ctx.close().catch(() => undefined);
 		onEnded?.();
 	};
 
 	src.onended = () => stop();
-	void ctx.resume().then(() => src.start());
+	void ctx.resume().then(() => {
+		if (!stopped) src.start();
+	});
 	return { stop };
 }
 
-function playMediaElement(file: File, onEnded?: () => void): Promise<PreviewHandle> {
+function playMediaElement(
+	file: File,
+	primed: AudioContext | null,
+	onEnded?: () => void
+): Promise<PreviewHandle> {
 	const Ctor = AudioCtx();
 	if (!Ctor || typeof document === 'undefined') {
 		return Promise.reject(new Error('Audio preview is not supported in this browser.'));
@@ -123,7 +138,8 @@ function playMediaElement(file: File, onEnded?: () => void): Promise<PreviewHand
 	media.preload = 'auto';
 	if ('playsInline' in media) (media as HTMLVideoElement).playsInline = true;
 
-	const ctx = new Ctor();
+	const owns = !(primed && primed.state !== 'closed');
+	const ctx = owns ? new Ctor() : primed!;
 	const source = ctx.createMediaElementSource(media);
 	source.connect(ctx.destination);
 
@@ -137,7 +153,7 @@ function playMediaElement(file: File, onEnded?: () => void): Promise<PreviewHand
 		media.pause();
 		source.disconnect();
 		URL.revokeObjectURL(url);
-		void ctx.close().catch(() => undefined);
+		if (owns || primed === ctx) void ctx.close().catch(() => undefined);
 		onEnded?.();
 	};
 
@@ -165,24 +181,33 @@ function playMediaElement(file: File, onEnded?: () => void): Promise<PreviewHand
 
 /**
  * Play ~4s from the start of a specific inspected source so the user can identify it.
+ * Multi-track/channel sources are demuxed; never silently falls back to the default mix.
  */
 export async function previewMediaSource(
 	file: File,
 	source: MediaSource,
-	onEnded?: () => void
+	onEnded?: () => void,
+	primed: AudioContext | null = null
 ): Promise<PreviewHandle> {
+	const ctx = primed ?? primeAudioContext();
+
 	if (typeof source.trackId === 'number') {
 		const extracted = await extractMp4AudioTrackHeads(file, PREVIEW_SEC, undefined, source.trackId);
-		const hit = extracted.find((e) => e.trackId === source.trackId) ?? extracted[0];
-		if (hit) return playBuffer(hit.samples, hit.sampleRate, onEnded);
-		// Fall through if demux failed for this track.
+		const hit = extracted.find((e) => e.trackId === source.trackId);
+		if (!hit) {
+			if (ctx && ctx.state !== 'closed') void ctx.close().catch(() => undefined);
+			throw new Error(
+				`Could not isolate “${source.label}” for preview. This track may use an unsupported codec.`
+			);
+		}
+		return playBuffer(hit.samples, hit.sampleRate, ctx, onEnded);
 	}
 
 	if (typeof source.channelIndex === 'number') {
-		const { buffer, ctx } = await decodeFileHead(file);
+		const buffer = await decodeFileHead(file);
 		return playAudioBufferChannel(buffer, source.channelIndex, ctx, onEnded);
 	}
 
-	// Single default stream / unknown: play the file itself for a few seconds.
-	return playMediaElement(file, onEnded);
+	// Single unnamed stream from inspect fallback — the file itself is the source.
+	return playMediaElement(file, ctx, onEnded);
 }
