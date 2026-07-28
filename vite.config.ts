@@ -14,5 +14,11 @@ export default defineConfig({
 			},
 			adapter: adapter()
 		})
-	]
+	],
+	optimizeDeps: {
+		include: ['@demostf/demo.js', 'mp4box', 'events', 'bit-buffer', 'snappyjs']
+	},
+	ssr: {
+		noExternal: ['@demostf/demo.js', 'mp4box']
+	}
 });

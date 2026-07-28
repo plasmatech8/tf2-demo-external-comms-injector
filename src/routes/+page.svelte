@@ -2,33 +2,41 @@
 	import { onMount } from 'svelte';
 	import { fade, slide } from 'svelte/transition';
 	import FileField from '$lib/components/FileField.svelte';
-
-	type MockTrack = {
-		id: string;
-		label: string;
-		defaultSelected: boolean;
-	};
-
-	const MOCK_TRACKS: MockTrack[] = [
-		{ id: '1', label: 'Track 1 — All Audio', defaultSelected: false },
-		{ id: '2', label: 'Track 2 — Game', defaultSelected: false },
-		{ id: '3', label: 'Track 3 — Discord', defaultSelected: true },
-		{ id: '4', label: 'Track 4 — Mic', defaultSelected: true }
-	];
-
-	const DEFAULT_TRACK_IDS = MOCK_TRACKS.filter((t) => t.defaultSelected).map((t) => t.id);
+	import { listDemoPlayers, type DemoPlayer } from '$lib/demo/players';
+	import { inspectMedia, type MediaInspection } from '$lib/media/tracks';
 
 	let demoFile = $state<File | null>(null);
 	let mediaFile = $state<File | null>(null);
 	let offset = $state(0);
-	let speaker = $state('');
-	let selectedTracks = $state<string[]>([]);
+	let selectedPlayerId = $state('');
+	let selectedSources = $state<string[]>([]);
 	let notesOpen = $state(false);
 	let generating = $state(false);
 	let successMessage = $state<string | null>(null);
+	let errorMessage = $state<string | null>(null);
 	let ready = $state(false);
 
-	const canGenerate = $derived(!!demoFile && !!mediaFile && !generating);
+	let players = $state<DemoPlayer[]>([]);
+	let playersLoading = $state(false);
+	let playersError = $state<string | null>(null);
+
+	let mediaInfo = $state<MediaInspection | null>(null);
+	let mediaLoading = $state(false);
+	let mediaError = $state<string | null>(null);
+
+	const selectedPlayer = $derived(
+		players.find((p) => String(p.userId) === selectedPlayerId) ?? null
+	);
+
+	const canGenerate = $derived(
+		!!demoFile &&
+			!!mediaFile &&
+			!!selectedPlayer &&
+			selectedSources.length > 0 &&
+			!generating &&
+			!playersLoading &&
+			!mediaLoading
+	);
 
 	onMount(() => {
 		const id = requestAnimationFrame(() => {
@@ -37,17 +45,61 @@
 		return () => cancelAnimationFrame(id);
 	});
 
-	function setMediaFile(file: File | null) {
-		mediaFile = file;
-		selectedTracks = file ? [...DEFAULT_TRACK_IDS] : [];
+	async function setDemoFile(file: File | null) {
+		demoFile = file;
+		players = [];
+		selectedPlayerId = '';
+		playersError = null;
 		successMessage = null;
+		errorMessage = null;
+
+		if (!file) return;
+
+		playersLoading = true;
+		try {
+			players = await listDemoPlayers(file);
+			if (players.length === 0) {
+				playersError = 'No players found in this demo file.';
+			} else {
+				selectedPlayerId = String(players[0].userId);
+			}
+		} catch (e) {
+			playersError = e instanceof Error ? e.message : 'Failed to read players from demo file.';
+		} finally {
+			playersLoading = false;
+		}
 	}
 
-	function toggleTrack(id: string) {
-		if (selectedTracks.includes(id)) {
-			selectedTracks = selectedTracks.filter((t) => t !== id);
+	async function setMediaFile(file: File | null) {
+		mediaFile = file;
+		mediaInfo = null;
+		selectedSources = [];
+		mediaError = null;
+		successMessage = null;
+		errorMessage = null;
+
+		if (!file) return;
+
+		mediaLoading = true;
+		try {
+			const info = await inspectMedia(file);
+			mediaInfo = info;
+			selectedSources = info.sources.filter((s) => s.defaultSelected).map((s) => s.id);
+			if (info.sources.length === 0) {
+				mediaError = info.summary || 'No audio sources found.';
+			}
+		} catch (e) {
+			mediaError = e instanceof Error ? e.message : 'Failed to inspect media file.';
+		} finally {
+			mediaLoading = false;
+		}
+	}
+
+	function toggleSource(id: string) {
+		if (selectedSources.includes(id)) {
+			selectedSources = selectedSources.filter((t) => t !== id);
 		} else {
-			selectedTracks = [...selectedTracks, id];
+			selectedSources = [...selectedSources, id];
 		}
 	}
 
@@ -56,17 +108,30 @@
 		return `${base}_with_comms.dem`;
 	}
 
+	function playerLabel(player: DemoPlayer): string {
+		const team = player.team ? ` · ${player.team}` : '';
+		return `${player.name}${team}`;
+	}
+
 	async function onGenerate() {
-		if (!demoFile || !mediaFile || generating) return;
+		if (!canGenerate || !demoFile || !mediaFile || !selectedPlayer) return;
 
 		generating = true;
 		successMessage = null;
+		errorMessage = null;
 
+		// UI-only mock: no network upload yet. Real flow will convert → upload → process → download.
 		await new Promise((r) => setTimeout(r, 1250));
 
 		const outName = downloadName(demoFile.name);
 		const blob = new Blob(
-			[`TF2 demo placeholder — ${outName}\n(mock output; no real processing)\n`],
+			[
+				`TF2 demo placeholder — ${outName}\n`,
+				`speaker=${selectedPlayer.name} (${selectedPlayer.steamId})\n`,
+				`offset=${offset}\n`,
+				`sources=${selectedSources.join(',')}\n`,
+				`(mock output; no real processing)\n`
+			],
 			{ type: 'application/octet-stream' }
 		);
 		const url = URL.createObjectURL(blob);
@@ -78,6 +143,10 @@
 
 		generating = false;
 		successMessage = `Downloaded ${outName}`;
+	}
+
+	function sourceLegend(info: MediaInspection): string {
+		return info.kind === 'channels' ? 'Audio channels' : 'Audio tracks';
 	}
 </script>
 
@@ -99,8 +168,10 @@
 				External Comms Audio Injection Tool
 			</p>
 			<p class="mt-4 max-w-md text-sm leading-relaxed text-[var(--color-muted)]">
-				Upload a demo and external voice/video, set when the countdown should sync, pick tracks to
-				keep, then generate a modified <span class="text-[var(--color-fg)]">.dem</span> for download.
+				Upload a demo file and external voice/video, set the offset so audio lines up with game
+				start, choose tracks, then generate a modified <span class="text-[var(--color-fg)]"
+					>.dem</span
+				>.
 			</p>
 		</header>
 
@@ -115,26 +186,23 @@
 				id="demo-file"
 				label="Demo file"
 				accept=".dem,application/octet-stream"
-				helper="Team Fortress 2 .dem recording."
+				helper="Team Fortress 2 .dem recording. Players are read in the browser when you select the file."
 				file={demoFile}
-				onchange={(f) => {
-					demoFile = f;
-					successMessage = null;
-				}}
+				onchange={(f) => void setDemoFile(f)}
 			/>
 
 			<FileField
 				id="media-file"
 				label="Audio / video"
 				accept="video/mp4,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/flac,audio/x-m4a,.mp3,.wav,.ogg,.webm,.flac,.m4a,.mp4"
-				helper="Conversion to 24 kHz mono WAV happens client-side before processing."
+				helper="Tracks/channels are inspected locally. Conversion to 24 kHz mono will happen client-side before upload."
 				file={mediaFile}
-				onchange={setMediaFile}
+				onchange={(f) => void setMediaFile(f)}
 			/>
 
 			<div class="flex flex-col gap-1.5">
 				<label for="offset" class="text-sm font-medium text-[var(--color-fg-strong)]">
-					Countdown / inject start offset (seconds)
+					Audio start offset in demo file (seconds)
 				</label>
 				<input
 					id="offset"
@@ -146,40 +214,56 @@
 						focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
 				/>
 				<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-					When the video/audio countdown ("5, 4, 3, 2, 1…") should sync with the demo.
+					Where injected audio begins in the demo file — usually game start / GO (countdown “0”),
+					not when the countdown starts saying “5”. Trim countdown from the media separately if
+					needed.
 				</p>
 			</div>
 
 			<fieldset class="flex flex-col gap-1.5">
 				<legend class="text-sm font-medium text-[var(--color-fg-strong)]">
-					Audio channels / tracks
+					{mediaInfo ? sourceLegend(mediaInfo) : 'Audio channels / tracks'}
 				</legend>
 
-				{#if mediaFile}
+				{#if mediaLoading}
+					<p
+						class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-[var(--color-muted)]"
+					>
+						Inspecting media…
+					</p>
+				{:else if mediaError}
+					<p
+						class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
+						role="alert"
+					>
+						{mediaError}
+					</p>
+				{:else if mediaInfo && mediaInfo.sources.length > 0}
 					<div
 						class="flex flex-col gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
 						transition:fade={{ duration: 180 }}
 					>
-						{#each MOCK_TRACKS as track (track.id)}
+						{#each mediaInfo.sources as source (source.id)}
 							<label
 								class="flex cursor-pointer items-center gap-2.5 py-1.5 text-sm text-[var(--color-fg)]"
 							>
 								<input
 									type="checkbox"
-									checked={selectedTracks.includes(track.id)}
-									onchange={() => toggleTrack(track.id)}
+									checked={selectedSources.includes(source.id)}
+									onchange={() => toggleSource(source.id)}
 									class="rounded border-[var(--color-border-strong)] bg-[var(--color-surface-1)] text-[var(--color-accent)]
 										focus:ring-[var(--color-accent)]"
 								/>
-								<span>{track.label}</span>
+								<span>{source.label}</span>
 							</label>
 						{/each}
 					</div>
+					<p class="text-xs text-[var(--color-muted)]">{mediaInfo.summary}</p>
 				{:else}
 					<p
 						class="rounded border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-[var(--color-muted)]"
 					>
-						Select a media file to list available tracks.
+						Select a media file to list available tracks or channels.
 					</p>
 				{/if}
 			</fieldset>
@@ -188,18 +272,43 @@
 				<label for="speaker" class="text-sm font-medium text-[var(--color-fg-strong)]">
 					Speaker / player attribution
 				</label>
-				<input
-					id="speaker"
-					type="text"
-					placeholder="plasmatech8"
-					autocomplete="off"
-					bind:value={speaker}
-					class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-fg-strong)] placeholder:text-[var(--color-muted)]
-						focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
-				/>
-				<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-					Player name substring for the injector CLI. SteamID / client index support can come later.
-				</p>
+
+				{#if playersLoading}
+					<p
+						class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-[var(--color-muted)]"
+					>
+						Reading players from demo file…
+					</p>
+				{:else if playersError}
+					<p
+						class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
+						role="alert"
+					>
+						{playersError}
+					</p>
+				{:else if players.length > 0}
+					<select
+						id="speaker"
+						bind:value={selectedPlayerId}
+						class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-fg-strong)]
+							focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
+					>
+						{#each players as player (player.userId)}
+							<option value={String(player.userId)}>{playerLabel(player)} — {player.steamId}</option
+							>
+						{/each}
+					</select>
+					<p class="text-xs leading-relaxed text-[var(--color-muted)]">
+						Players parsed from the demo file’s userinfo. Voice will be attributed to the selected
+						player.
+					</p>
+				{:else}
+					<p
+						class="rounded border border-dashed border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-[var(--color-muted)]"
+					>
+						Select a demo file to load players.
+					</p>
+				{/if}
 			</div>
 
 			<div class="pt-1">
@@ -218,6 +327,10 @@
 						Generate &amp; download
 					{/if}
 				</button>
+				<p class="mt-2 text-xs leading-relaxed text-[var(--color-muted)]">
+					Nothing is uploaded yet — files stay in the browser. The real flow will convert selected
+					audio, upload on Generate, process on the worker, then download.
+				</p>
 
 				{#if successMessage}
 					<p
@@ -227,6 +340,9 @@
 					>
 						{successMessage}
 					</p>
+				{/if}
+				{#if errorMessage}
+					<p class="mt-3 text-sm text-red-300/90" role="alert">{errorMessage}</p>
 				{/if}
 			</div>
 		</form>
@@ -249,9 +365,9 @@
 				class="mt-3 list-disc space-y-1 pl-4 text-xs leading-relaxed text-[var(--color-muted)]"
 				transition:slide={{ duration: 160 }}
 			>
-				<li>Target format path: 24 kHz mono WAV (and optional Opus) still TBD.</li>
-				<li>Optional countdown auto-detect from media — not wired yet.</li>
-				<li>Optional waveform / offset preview — deferred.</li>
+				<li>Generate currently mocks download only — no worker upload/processing yet.</li>
+				<li>Target encode path: 24 kHz mono (WAV intermediate → Opus in injector).</li>
+				<li>Optional waveform / countdown helpers — deferred.</li>
 			</ul>
 		{/if}
 	</footer>
