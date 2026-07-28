@@ -33,6 +33,7 @@
 	let countdownDone = $state(false);
 	let countdownNote = $state<string | null>(null);
 	let countdownDetail = $state<string | null>(null);
+	let detectAbort: AbortController | null = null;
 	let previewing = $state(false);
 	let previewHandle = $state<PreviewHandle | null>(null);
 
@@ -75,13 +76,22 @@
 		previewing = false;
 	}
 
+	function cancelCountdownDetect() {
+		detectAbort?.abort();
+	}
+
 	async function runCountdownDetect(file: File, primed: AudioContext | null = null) {
+		detectAbort?.abort();
+		const abort = new AbortController();
+		detectAbort = abort;
+
 		countdownLoading = true;
 		countdownDone = false;
 		countdownNote = null;
 		countdownDetail = null;
 		try {
-			const hit = await detectCountdownGameStart(file, primed);
+			const hit = await detectCountdownGameStart(file, primed, abort.signal);
+			if (abort.signal.aborted) return;
 			if (hit.ok) {
 				mediaGameStart = hit.gameStartSec;
 				countdownNote = `~${hit.gameStartSec}s · ${hit.confidence}`;
@@ -91,10 +101,16 @@
 				countdownDetail = hit.detail;
 			}
 		} catch (e) {
+			if (abort.signal.aborted || (e instanceof Error && e.name === 'AbortError')) {
+				countdownNote = 'Cancelled — set manually';
+				countdownDetail = 'Countdown detection was cancelled.';
+				return;
+			}
 			countdownNote = 'Detect failed — set manually';
 			countdownDetail =
 				e instanceof Error ? e.message : 'Countdown detection failed — set game start manually.';
 		} finally {
+			if (detectAbort === abort) detectAbort = null;
 			countdownLoading = false;
 			countdownDone = true;
 			if (primed && primed.state !== 'closed') {
@@ -150,6 +166,7 @@
 
 	async function setMediaFile(file: File | null) {
 		stopPreview();
+		cancelCountdownDetect();
 		mediaFile = file;
 		mediaInfo = null;
 		selectedSources = [];
@@ -351,14 +368,26 @@
 								inputmode="decimal"
 								value={mediaGameStart ?? ''}
 								oninput={onGameStartInput}
+								disabled={countdownLoading}
 								aria-invalid={showGameStartNeeded}
 								class="w-full rounded border bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)] placeholder:text-[var(--color-muted)]
 									focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]
+									disabled:cursor-not-allowed disabled:opacity-55
 									{showGameStartNeeded ? 'border-red-400/50' : 'border-[var(--color-border)]'}"
 							/>
 
 							{#if countdownLoading}
-								<LoadingStatus label="Detecting countdown…" />
+								<div class="flex flex-wrap items-center gap-2">
+									<LoadingStatus label="Detecting countdown…" />
+									<button
+										type="button"
+										class="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2.5 py-1 text-xs tracking-wide text-[var(--color-fg)] uppercase
+											hover:border-[var(--color-border-strong)]"
+										onclick={cancelCountdownDetect}
+									>
+										Cancel
+									</button>
+								</div>
 							{:else if countdownNote}
 								<p
 									class="inline-flex items-center gap-1.5 text-xs text-[var(--color-muted)]"
@@ -388,13 +417,13 @@
 									type="button"
 									class="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs tracking-wide text-[var(--color-fg)] uppercase
 										hover:border-[var(--color-border-strong)] disabled:cursor-not-allowed disabled:opacity-40"
-									disabled={!gameStartValid || !mediaFile}
+									disabled={!gameStartValid || !mediaFile || countdownLoading}
 									onclick={() => (previewing ? stopPreview() : void onPreview())}
 								>
 									{previewing ? 'Stop preview' : 'Preview ±5s'}
 								</button>
 								<Hint
-									text="Preview plays 5s before/after game start with a loud 0.5s beep on the marker."
+									text="Preview plays 5s before/after game start with a soft mid 0.45s beep on the marker."
 								/>
 							</div>
 

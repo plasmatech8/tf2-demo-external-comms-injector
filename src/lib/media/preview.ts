@@ -17,18 +17,18 @@ declare global {
 }
 
 /**
- * Loud 0.5s monotone cue at `when` (AudioContext time).
- * Ducks the media feed so the beep stays audible over game/Discord mix.
+ * Soft mid-range 0.45s monotone cue at `when` (AudioContext time).
+ * Lightly ducks media so the beep stays clear without hurting ears.
  */
-function scheduleBeep(ctx: AudioContext, when: number, mediaGain: GainNode, freq = 880) {
-	const duck = 0.08;
-	const peak = 0.95;
-	const dur = 0.5;
+function scheduleBeep(ctx: AudioContext, when: number, mediaGain: GainNode, freq = 440) {
+	const duck = 0.35;
+	const peak = 0.16;
+	const dur = 0.45;
 
 	mediaGain.gain.cancelScheduledValues(when);
 	mediaGain.gain.setValueAtTime(mediaGain.gain.value, when);
-	mediaGain.gain.linearRampToValueAtTime(duck, when + 0.02);
-	mediaGain.gain.setValueAtTime(duck, when + dur - 0.04);
+	mediaGain.gain.linearRampToValueAtTime(duck, when + 0.03);
+	mediaGain.gain.setValueAtTime(duck, when + dur - 0.05);
 	mediaGain.gain.linearRampToValueAtTime(1, when + dur);
 
 	const osc = ctx.createOscillator();
@@ -36,8 +36,8 @@ function scheduleBeep(ctx: AudioContext, when: number, mediaGain: GainNode, freq
 	osc.type = 'sine';
 	osc.frequency.value = freq;
 	gain.gain.setValueAtTime(0.0001, when);
-	gain.gain.exponentialRampToValueAtTime(peak, when + 0.015);
-	gain.gain.setValueAtTime(peak, when + dur - 0.04);
+	gain.gain.exponentialRampToValueAtTime(peak, when + 0.04);
+	gain.gain.setValueAtTime(peak, when + dur - 0.06);
 	gain.gain.exponentialRampToValueAtTime(0.0001, when + dur);
 	osc.connect(gain);
 	gain.connect(ctx.destination);
@@ -107,7 +107,7 @@ export async function previewAroundGameStart(
 	});
 
 	const beepAt = ctx.currentTime + Math.max(0, gameStartSec - startAt);
-	scheduleBeep(ctx, beepAt, mediaGain, 880);
+	scheduleBeep(ctx, beepAt, mediaGain, 440);
 
 	await media.play();
 
