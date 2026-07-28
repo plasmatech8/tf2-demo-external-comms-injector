@@ -7,7 +7,8 @@
 	import { listDemoPlayers, type DemoPlayer } from '$lib/demo/players';
 	import { detectCountdownGameStart, primeAudioContext } from '$lib/media/countdown';
 	import { previewAroundGameStart, type PreviewHandle } from '$lib/media/preview';
-	import { inspectMedia, type MediaInspection } from '$lib/media/tracks';
+	import { previewMediaSource } from '$lib/media/source-preview';
+	import { inspectMedia, type MediaInspection, type MediaSource } from '$lib/media/tracks';
 
 	let demoFile = $state<File | null>(null);
 	let mediaFile = $state<File | null>(null);
@@ -36,6 +37,8 @@
 	let detectAbort: AbortController | null = null;
 	let previewing = $state(false);
 	let previewHandle = $state<PreviewHandle | null>(null);
+	let sourcePreviewId = $state<string | null>(null);
+	let sourcePreviewHandle = $state<PreviewHandle | null>(null);
 
 	const selectedPlayer = $derived(
 		players.find((p) => String(p.userId) === selectedPlayerId) ?? null
@@ -67,6 +70,7 @@
 		return () => {
 			cancelAnimationFrame(id);
 			previewHandle?.stop();
+			sourcePreviewHandle?.stop();
 		};
 	});
 
@@ -74,6 +78,32 @@
 		previewHandle?.stop();
 		previewHandle = null;
 		previewing = false;
+	}
+
+	function stopSourcePreview() {
+		sourcePreviewHandle?.stop();
+		sourcePreviewHandle = null;
+		sourcePreviewId = null;
+	}
+
+	async function onSourcePreview(source: MediaSource) {
+		if (!mediaFile) return;
+		if (sourcePreviewId === source.id) {
+			stopSourcePreview();
+			return;
+		}
+		stopPreview();
+		stopSourcePreview();
+		sourcePreviewId = source.id;
+		try {
+			sourcePreviewHandle = await previewMediaSource(mediaFile, source, () => {
+				sourcePreviewHandle = null;
+				sourcePreviewId = null;
+			});
+		} catch (e) {
+			sourcePreviewId = null;
+			errorMessage = e instanceof Error ? e.message : 'Track preview failed.';
+		}
 	}
 
 	function cancelCountdownDetect() {
@@ -126,6 +156,7 @@
 
 	async function onPreview() {
 		if (!mediaFile || !gameStartValid || mediaGameStart === null) return;
+		stopSourcePreview();
 		stopPreview();
 		previewing = true;
 		try {
@@ -166,6 +197,7 @@
 
 	async function setMediaFile(file: File | null) {
 		stopPreview();
+		stopSourcePreview();
 		cancelCountdownDetect();
 		mediaFile = file;
 		mediaInfo = null;
@@ -438,9 +470,12 @@
 								id="tracks-label"
 							>
 								{mediaInfo ? sourceLegend(mediaInfo) : 'Tracks'}
-								{#if mediaInfo?.summary}
-									<Hint text={mediaInfo.summary} label="Track details" />
-								{/if}
+								<Hint
+									text={mediaInfo?.summary
+										? `${mediaInfo.summary} Use Play to hear ~4s from the start of each source.`
+										: 'Use Play to hear ~4s from the start of each source.'}
+									label="Track details"
+								/>
 							</p>
 
 							{#if mediaLoading}
@@ -460,18 +495,31 @@
 									transition:fade={{ duration: 180 }}
 								>
 									{#each mediaInfo.sources as source (source.id)}
-										<label
-											class="flex cursor-pointer items-center gap-2.5 py-1.5 text-sm text-[var(--color-fg)]"
-										>
-											<input
-												type="checkbox"
-												checked={selectedSources.includes(source.id)}
-												onchange={() => toggleSource(source.id)}
-												class="rounded border-[var(--color-border-strong)] bg-[var(--color-surface-2)] text-[var(--color-accent)]
-													focus:ring-[var(--color-accent)]"
-											/>
-											<span>{source.label}</span>
-										</label>
+										<div class="flex items-center gap-2 py-1">
+											<label
+												class="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-sm text-[var(--color-fg)]"
+											>
+												<input
+													type="checkbox"
+													checked={selectedSources.includes(source.id)}
+													onchange={() => toggleSource(source.id)}
+													class="rounded border-[var(--color-border-strong)] bg-[var(--color-surface-2)] text-[var(--color-accent)]
+														focus:ring-[var(--color-accent)]"
+												/>
+												<span class="truncate">{source.label}</span>
+											</label>
+											<button
+												type="button"
+												class="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[10px] tracking-wide text-[var(--color-muted)] uppercase
+													hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)]"
+												aria-label={sourcePreviewId === source.id
+													? `Stop preview of ${source.label}`
+													: `Preview ${source.label}`}
+												onclick={() => void onSourcePreview(source)}
+											>
+												{sourcePreviewId === source.id ? 'Stop' : 'Play'}
+											</button>
+										</div>
 									{/each}
 								</div>
 							{/if}

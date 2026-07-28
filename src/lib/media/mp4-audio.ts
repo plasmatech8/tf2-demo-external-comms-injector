@@ -243,12 +243,14 @@ async function decodeAdts(
 }
 
 /**
- * Demux + decode the first `maxSec` of ranked MP4 audio tracks (game first).
+ * Demux + decode the first `maxSec` of MP4 audio tracks.
+ * Pass `onlyTrackId` to extract a single track (for per-track preview).
  */
 export async function extractMp4AudioTrackHeads(
 	file: File,
 	maxSec: number,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	onlyTrackId?: number
 ): Promise<ExtractedAudio[]> {
 	throwIfAborted(signal);
 
@@ -274,12 +276,14 @@ export async function extractMp4AudioTrackHeads(
 		mp4.onError = (msg: string) => reject(new Error(msg || 'MP4 parse failed'));
 		mp4.onReady = (movie: { audioTracks?: Mp4AudioTrackInfo[] }) => {
 			const displayNames = readTrackDisplayNames(mp4);
-			tracks = rankAudioTracks(
-				(movie.audioTracks ?? []).map((t) => ({
-					...t,
-					name: displayNames.get(t.id) || t.name
-				}))
-			).slice(0, 4);
+			const all = (movie.audioTracks ?? []).map((t) => ({
+				...t,
+				name: displayNames.get(t.id) || t.name
+			}));
+			tracks =
+				typeof onlyTrackId === 'number'
+					? all.filter((t) => t.id === onlyTrackId)
+					: rankAudioTracks(all).slice(0, 4);
 
 			for (const track of tracks) {
 				collected.set(track.id, []);
@@ -315,7 +319,6 @@ export async function extractMp4AudioTrackHeads(
 			await ready;
 		}
 
-		// Stop early once we likely have enough samples for every track.
 		if (started && tracks.length > 0) {
 			const enough = tracks.every((t) => {
 				const list = collected.get(t.id) ?? [];
