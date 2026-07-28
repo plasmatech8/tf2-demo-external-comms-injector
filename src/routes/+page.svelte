@@ -77,7 +77,8 @@
 				mediaGameStart = hit.gameStartSec;
 				countdownNote = `Detected ~${hit.gameStartSec}s (${hit.confidence} confidence). ${hit.detail}`;
 			} else {
-				countdownNote = 'No clear 3-2-1 cadence found in the first ~30s — set game start manually.';
+				countdownNote =
+					'No clear TF2 announcer 3-2-1 match in the first ~20s — set game start manually.';
 			}
 		} catch (e) {
 			countdownNote =
@@ -333,7 +334,7 @@
 							</p>
 
 							{#if countdownLoading}
-								<LoadingStatus label="Listening for 3…2…1…GO…" />
+								<LoadingStatus label="Matching TF2 announcer countdown…" />
 							{:else if countdownNote}
 								<p class="text-xs leading-relaxed text-[var(--color-muted)]" role="status">
 									{countdownNote}
@@ -361,8 +362,8 @@
 								</button>
 							</div>
 							<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-								Preview plays 5s before through 5s after game start, with beeps on the marker.
-								Detection is a best-effort energy cadence heuristic (not full speech recognition).
+								Preview plays 5s before through 5s after game start, with a loud 0.5s monotone beep
+								on the marker.
 							</p>
 
 							{#if mediaFile && !gameStartValid && !countdownLoading}
@@ -467,7 +468,10 @@
 				transition:slide={{ duration: 160 }}
 			>
 				<li>Generate currently mocks download only — no processing yet.</li>
-				<li>Countdown detect is a cadence/energy heuristic; verify with Preview ±5s.</li>
+				<li>
+					Countdown detect cross-correlates TF2 announcer begins_5…1sec WAVs (no speech
+					recognition). Verify with Preview.
+				</li>
 				<li>Track inspect reads MP4 metadata in chunks (not the whole video).</li>
 			</ul>
 		{/if}

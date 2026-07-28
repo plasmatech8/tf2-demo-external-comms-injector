@@ -16,18 +16,33 @@ declare global {
 	}
 }
 
-function scheduleBeep(ctx: AudioContext, when: number, freq = 880) {
+/**
+ * Loud 0.5s monotone cue at `when` (AudioContext time).
+ * Ducks the media feed so the beep stays audible over game/Discord mix.
+ */
+function scheduleBeep(ctx: AudioContext, when: number, mediaGain: GainNode, freq = 880) {
+	const duck = 0.08;
+	const peak = 0.95;
+	const dur = 0.5;
+
+	mediaGain.gain.cancelScheduledValues(when);
+	mediaGain.gain.setValueAtTime(mediaGain.gain.value, when);
+	mediaGain.gain.linearRampToValueAtTime(duck, when + 0.02);
+	mediaGain.gain.setValueAtTime(duck, when + dur - 0.04);
+	mediaGain.gain.linearRampToValueAtTime(1, when + dur);
+
 	const osc = ctx.createOscillator();
 	const gain = ctx.createGain();
 	osc.type = 'sine';
 	osc.frequency.value = freq;
 	gain.gain.setValueAtTime(0.0001, when);
-	gain.gain.exponentialRampToValueAtTime(0.35, when + 0.01);
-	gain.gain.exponentialRampToValueAtTime(0.0001, when + 0.12);
+	gain.gain.exponentialRampToValueAtTime(peak, when + 0.015);
+	gain.gain.setValueAtTime(peak, when + dur - 0.04);
+	gain.gain.exponentialRampToValueAtTime(0.0001, when + dur);
 	osc.connect(gain);
 	gain.connect(ctx.destination);
 	osc.start(when);
-	osc.stop(when + 0.14);
+	osc.stop(when + dur + 0.02);
 }
 
 /**
@@ -55,7 +70,10 @@ export async function previewAroundGameStart(
 
 	const ctx = new Ctor();
 	const source = ctx.createMediaElementSource(media);
-	source.connect(ctx.destination);
+	const mediaGain = ctx.createGain();
+	mediaGain.gain.value = 1;
+	source.connect(mediaGain);
+	mediaGain.connect(ctx.destination);
 
 	let stopped = false;
 	let pollId = 0;
@@ -66,6 +84,7 @@ export async function previewAroundGameStart(
 		window.clearInterval(pollId);
 		media.pause();
 		source.disconnect();
+		mediaGain.disconnect();
 		URL.revokeObjectURL(url);
 		void ctx.close().catch(() => undefined);
 		onEnded?.();
@@ -88,9 +107,7 @@ export async function previewAroundGameStart(
 	});
 
 	const beepAt = ctx.currentTime + Math.max(0, gameStartSec - startAt);
-	scheduleBeep(ctx, beepAt, 880);
-	// Second softer tick for clarity
-	scheduleBeep(ctx, beepAt + 0.16, 1174);
+	scheduleBeep(ctx, beepAt, mediaGain, 880);
 
 	await media.play();
 
