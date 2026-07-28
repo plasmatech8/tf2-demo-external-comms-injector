@@ -359,16 +359,13 @@
 							<div class="flex flex-wrap items-center gap-2 pt-0.5">
 								<button
 									type="button"
-									class="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs tracking-wide text-[var(--color-fg)] uppercase
+									class="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs tracking-wide text-[var(--color-fg)]
 										hover:border-[var(--color-border-strong)] disabled:cursor-not-allowed disabled:opacity-40"
 									disabled={!gameStartValid || !mediaFile}
 									onclick={() => (previewing ? stopPreview() : void onPreview())}
 								>
 									{previewing ? 'Stop preview' : 'Preview ±5s'}
 								</button>
-								<Hint
-									text="Preview plays 5s before/after game start with a soft mid 0.45s beep on the marker."
-								/>
 							</div>
 
 							{#if showGameStartNeeded}
@@ -382,12 +379,9 @@
 								id="tracks-label"
 							>
 								{mediaInfo ? sourceLegend(mediaInfo) : 'Tracks'}
-								<Hint
-									text={mediaInfo?.summary
-										? `${mediaInfo.summary} Use Play to hear ~4s from the start of each source.`
-										: 'Use Play to hear ~4s from the start of each source.'}
-									label="Track details"
-								/>
+								{#if mediaInfo?.summary}
+									<Hint text={mediaInfo.summary} label="Track details" />
+								{/if}
 							</p>
 
 							{#if mediaLoading}
