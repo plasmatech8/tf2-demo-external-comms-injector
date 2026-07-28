@@ -184,19 +184,25 @@
 				void onGenerate();
 			}}
 		>
-			<section class="flex flex-col gap-4">
+			<div class="flex flex-col gap-4">
+				<p
+					class="font-[family-name:var(--font-display)] text-xs font-semibold tracking-[0.14em] text-[var(--color-muted)] uppercase"
+				>
+					Demo
+				</p>
+
 				<FileField
 					id="demo-file"
 					label="Demo file"
 					accept=".dem,application/octet-stream"
-					helper="Team Fortress 2 .dem recording. Players are read in the browser when you select the file."
+					helper="Players are read in the browser when you select the file."
 					file={demoFile}
 					onchange={(f) => void setDemoFile(f)}
 				/>
 
 				<div class="flex flex-col gap-1.5">
 					<label for="speaker" class="text-sm font-medium text-[var(--color-fg-strong)]">
-						Speaker / player attribution
+						Speaker
 					</label>
 
 					{#if playersLoading}
@@ -222,7 +228,7 @@
 							{/each}
 						</select>
 						<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-							From this demo file’s userinfo. Injected voice is attributed to the selected player.
+							Injected voice is attributed to this player from the demo.
 						</p>
 					{:else}
 						<p
@@ -232,21 +238,27 @@
 						</p>
 					{/if}
 				</div>
-			</section>
+			</div>
 
-			<section class="flex flex-col gap-4">
+			<div class="flex flex-col gap-4 border-t border-[var(--color-border)] pt-6">
+				<p
+					class="font-[family-name:var(--font-display)] text-xs font-semibold tracking-[0.14em] text-[var(--color-muted)] uppercase"
+				>
+					Recording
+				</p>
+
 				<FileField
 					id="media-file"
 					label="Audio / video"
 					accept="video/mp4,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/flac,audio/x-m4a,.mp3,.wav,.ogg,.webm,.flac,.m4a,.mp4"
-					helper="Tracks/channels are inspected locally from file metadata (not a full decode)."
+					helper="Tracks are read from file metadata (not a full decode)."
 					file={mediaFile}
 					onchange={(f) => void setMediaFile(f)}
 				/>
 
 				<div class="flex flex-col gap-1.5">
 					<label for="media-game-start" class="text-sm font-medium text-[var(--color-fg-strong)]">
-						Game start in audio/video (seconds)
+						Game start (seconds)
 					</label>
 					<input
 						id="media-game-start"
@@ -261,15 +273,15 @@
 							focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
 					/>
 					<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-						How far into your recording until the game actually starts (end of “5, 4, 3, 2, 1…” /
-						GO). Audio before this is skipped.
+						How far into the recording until GO / end of the countdown. Audio before this is
+						skipped.
 					</p>
 				</div>
 
-				<fieldset class="flex flex-col gap-1.5">
-					<legend class="text-sm font-medium text-[var(--color-fg-strong)]">
+				<div class="flex flex-col gap-1.5">
+					<p class="text-sm font-medium text-[var(--color-fg-strong)]" id="tracks-label">
 						{mediaInfo ? sourceLegend(mediaInfo) : 'Audio channels / tracks'}
-					</legend>
+					</p>
 
 					{#if mediaLoading}
 						<LoadingStatus label="Reading tracks…" />
@@ -283,6 +295,8 @@
 					{:else if mediaInfo && mediaInfo.sources.length > 0}
 						<div
 							class="flex flex-col gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
+							role="group"
+							aria-labelledby="tracks-label"
 							transition:fade={{ duration: 180 }}
 						>
 							{#each mediaInfo.sources as source (source.id)}
@@ -308,10 +322,10 @@
 							Select a media file to list available tracks or channels.
 						</p>
 					{/if}
-				</fieldset>
-			</section>
+				</div>
+			</div>
 
-			<div class="pt-1">
+			<div class="border-t border-[var(--color-border)] pt-6">
 				<button
 					type="submit"
 					disabled={!canGenerate}
