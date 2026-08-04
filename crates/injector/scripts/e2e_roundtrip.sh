@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # End-to-end: inject tone → extract → check duration/steamid/packet count
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
+CRATE="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$CRATE"
 
 export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}/usr/local/lib/pkgconfig"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}/usr/local/lib"

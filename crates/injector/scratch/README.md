@@ -18,6 +18,8 @@ Open with Demoman from this folder.
 
 ## Inject recipe (current CLI)
 
+From `crates/injector`:
+
 ```bash
 cargo run --release --bin inject-comms -- \
   scratch/sultry.dem \

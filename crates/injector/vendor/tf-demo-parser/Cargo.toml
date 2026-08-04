@@ -91,16 +91,6 @@ test-case = "3.3.1"
 iai-callgrind = "0.15.2"
 insta = { version = "1.39.0", features = ["json"] }
 
-[profile.release]
-lto = "thin"
-
-[profile.bench]
-debug = true
-
-[profile.dev]
-opt-level = 2
-
-[[bench]]
-name = "parse"
-harness = false
+# Profiles and benches omitted in this vendored snapshot (benches/ stripped;
+# workspace root owns profiles).
 

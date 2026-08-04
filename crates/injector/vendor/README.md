@@ -6,4 +6,6 @@ re-encode demos.
 
 Upstream license: MIT OR Apache-2.0 (see LICENSE files in this directory).
 
-Test fixtures / fuzz corpora were stripped to keep the tree small.
+Test fixtures / fuzz corpora / benches were stripped to keep the tree small.
+The vendored `Cargo.toml` drops `[[bench]]` (benches/ not present) and unused
+package-level profiles.
