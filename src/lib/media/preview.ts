@@ -4,6 +4,8 @@ export type PreviewHandle = {
 	stop: () => void;
 };
 
+const SEEK_TIMEOUT_MS = 4000;
+
 function AudioCtx(): typeof AudioContext | undefined {
 	if (typeof AudioContext !== 'undefined') return AudioContext;
 	if (typeof window !== 'undefined' && window.webkitAudioContext) return window.webkitAudioContext;
@@ -77,45 +79,72 @@ export async function previewAroundGameStart(
 
 	let stopped = false;
 	let pollId = 0;
+	let notifyEnded = false;
+
+	const cleanup = () => {
+		window.clearInterval(pollId);
+		media.pause();
+		media.removeAttribute('src');
+		media.load();
+		try {
+			source.disconnect();
+			mediaGain.disconnect();
+		} catch {
+			/* already disconnected */
+		}
+		URL.revokeObjectURL(url);
+		void ctx.close().catch(() => undefined);
+	};
 
 	const stop = () => {
 		if (stopped) return;
 		stopped = true;
-		window.clearInterval(pollId);
-		media.pause();
-		source.disconnect();
-		mediaGain.disconnect();
-		URL.revokeObjectURL(url);
-		void ctx.close().catch(() => undefined);
-		onEnded?.();
+		cleanup();
+		if (notifyEnded) onEnded?.();
 	};
 
-	await new Promise<void>((resolve, reject) => {
-		media.onloadedmetadata = () => resolve();
-		media.onerror = () => reject(new Error('Could not load media for preview.'));
-	});
+	try {
+		await new Promise<void>((resolve, reject) => {
+			media.onloadedmetadata = () => resolve();
+			media.onerror = () => reject(new Error('Could not load media for preview.'));
+		});
 
-	if (ctx.state === 'suspended') await ctx.resume();
+		if (ctx.state === 'suspended') await ctx.resume();
 
-	media.currentTime = startAt;
-	await new Promise<void>((resolve) => {
-		if (Math.abs(media.currentTime - startAt) < 0.05) {
-			resolve();
-			return;
-		}
-		media.onseeked = () => resolve();
-	});
+		media.currentTime = startAt;
+		await new Promise<void>((resolve, reject) => {
+			if (Math.abs(media.currentTime - startAt) < 0.05) {
+				resolve();
+				return;
+			}
+			const timer = window.setTimeout(() => {
+				reject(new Error('Timed out seeking to the game-start preview position.'));
+			}, SEEK_TIMEOUT_MS);
+			media.onseeked = () => {
+				window.clearTimeout(timer);
+				resolve();
+			};
+			media.onerror = () => {
+				window.clearTimeout(timer);
+				reject(new Error('Could not seek media for preview.'));
+			};
+		});
 
-	const beepAt = ctx.currentTime + Math.max(0, gameStartSec - startAt);
-	scheduleBeep(ctx, beepAt, mediaGain, 440);
+		const beepAt = ctx.currentTime + Math.max(0, gameStartSec - startAt);
+		scheduleBeep(ctx, beepAt, mediaGain, 440);
 
-	await media.play();
+		await media.play();
 
-	pollId = window.setInterval(() => {
-		if (media.currentTime >= endAt || media.ended) stop();
-	}, 50);
+		notifyEnded = true;
+		pollId = window.setInterval(() => {
+			if (media.currentTime >= endAt || media.ended) stop();
+		}, 50);
 
-	media.onended = () => stop();
+		media.onended = () => stop();
 
-	return { stop };
+		return { stop };
+	} catch (e) {
+		stop();
+		throw e instanceof Error ? e : new Error('Preview failed.');
+	}
 }

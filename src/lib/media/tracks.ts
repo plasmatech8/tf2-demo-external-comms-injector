@@ -191,6 +191,7 @@ function sourcesFromMp4Tracks(audioTracks: Mp4AudioTrack[]): MediaSource[] {
 /**
  * Progressive MP4 parse — only reads chunks needed for the moov/header,
  * so multi‑GB Medal recordings stay fast.
+ * Medal/ffmpeg often put `moov` at the end; probe the tail first.
  */
 async function parseMp4AudioTracks(file: File): Promise<Mp4AudioTrack[]> {
 	const { createFile, MP4BoxBuffer } = await import('mp4box');
@@ -225,21 +226,28 @@ async function parseMp4AudioTracks(file: File): Promise<Mp4AudioTrack[]> {
 
 		void (async () => {
 			try {
-				let offset = 0;
-				let guard = 0;
-				while (!settled && offset < file.size && guard < 64) {
-					guard += 1;
-					const end = Math.min(offset + MP4_CHUNK_SIZE, file.size);
-					const ab = await file.slice(offset, end).arrayBuffer();
-					if (settled) return;
-					const buf = MP4BoxBuffer.fromArrayBuffer(ab, offset);
-					const next = mp4.appendBuffer(buf);
-					if (settled) return;
+				const appendRange = async (start: number, end: number) => {
+					if (settled || end <= start) return start;
+					const ab = await file.slice(start, end).arrayBuffer();
+					if (settled) return start;
+					const next = mp4.appendBuffer(MP4BoxBuffer.fromArrayBuffer(ab, start));
+					return typeof next === 'number' && next > start ? next : end;
+				};
 
-					if (typeof next === 'number' && next > offset) {
-						offset = next;
-					} else {
-						offset = end;
+				// Pass 1: tail probe — moov-at-end is common for Medal clips.
+				const tailBytes = Math.min(file.size, 8 * MP4_CHUNK_SIZE);
+				if (tailBytes > 0) {
+					await appendRange(file.size - tailBytes, file.size);
+				}
+
+				// Pass 2: scan from the start if moov still missing (faststart / moov early).
+				if (!settled && !mp4.moov) {
+					let offset = 0;
+					const stopBeforeTail = Math.max(0, file.size - tailBytes);
+					let guard = 0;
+					while (!settled && !mp4.moov && offset < stopBeforeTail && guard < 64) {
+						guard += 1;
+						offset = await appendRange(offset, Math.min(offset + MP4_CHUNK_SIZE, stopBeforeTail));
 					}
 				}
 
