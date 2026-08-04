@@ -4,20 +4,20 @@
 .vscode/
 .tools/
 
-# Large demo binaries (fetch via scripts/fetch_sample_demo.sh)
-samples/*.dem
-samples/e2e_*.json
-samples/e2e_*.wav
-samples/extracted_*.wav
-samples/injected*.dem
+# Large demo binaries (fetch via crates/injector/scripts/fetch_sample_demo.sh)
+crates/injector/samples/*.dem
+crates/injector/samples/e2e_*.json
+crates/injector/samples/e2e_*.wav
+crates/injector/samples/extracted_*.wav
+crates/injector/samples/injected*.dem
 
 # Local research clones
 /research/
 /tmp/
 
 # Manual-test demos / audio / video (keep README tracked)
-/scratch/**
-!/scratch/README.md
+/crates/injector/scratch/**
+!/crates/injector/scratch/README.md
 
-vendor/tf-demo-parser/.forgejo/
-vendor/tf-demo-parser/examples/
+crates/injector/vendor/tf-demo-parser/.forgejo/
+crates/injector/vendor/tf-demo-parser/examples/

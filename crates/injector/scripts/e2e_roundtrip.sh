@@ -1,36 +1,37 @@
 #!/usr/bin/env bash
 # End-to-end: inject tone → extract → check duration/steamid/packet count
 set -euo pipefail
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$ROOT"
+CRATE="$(cd "$(dirname "$0")/.." && pwd)"
+REPO="$(cd "$CRATE/../.." && pwd)"
+cd "$REPO"
 
 export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}/usr/local/lib/pkgconfig"
 export LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}/usr/local/lib"
 
-./scripts/fetch_sample_demo.sh
-cargo build --release -q
+./crates/injector/scripts/fetch_sample_demo.sh
+cargo build --release -p tf2-demo-comms-injector -q
 
-DEMO="samples/match-20260717-1011-koth_proot_b6c-alt2.dem"
-AUDIO="samples/test_tone_440hz.wav"
-INJECTED="samples/e2e_injected.dem"
-EXTRACTED="samples/e2e_extracted.wav"
+DEMO="crates/injector/samples/match-20260717-1011-koth_proot_b6c-alt2.dem"
+AUDIO="crates/injector/samples/test_tone_440hz.wav"
+INJECTED="crates/injector/samples/e2e_injected.dem"
+EXTRACTED="crates/injector/samples/e2e_extracted.wav"
 
 rm -f "$INJECTED" "$EXTRACTED"
 
 ./target/release/inject-comms "$DEMO" "$AUDIO" -o "$INJECTED" \
-  --player plasmatech8 --offset 10 --loudness-db 0 > samples/e2e_inject.json
+  --player plasmatech8 --offset 10 --loudness-db 0 > crates/injector/samples/e2e_inject.json
 
-./target/release/extract-voice "$INJECTED" -o "$EXTRACTED" > samples/e2e_extract.json
+./target/release/extract-voice "$INJECTED" -o "$EXTRACTED" > crates/injector/samples/e2e_extract.json
 
 python3 - <<'PY'
 import json, wave, struct, math
-inj = json.load(open("samples/e2e_inject.json"))
-ext = json.load(open("samples/e2e_extract.json"))
+inj = json.load(open("crates/injector/samples/e2e_inject.json"))
+ext = json.load(open("crates/injector/samples/e2e_extract.json"))
 assert inj["packets_injected"] == 100, inj
 assert ext["packets"] == 100, ext
 assert ext["steam_ids"] == [76561198081400087], ext
 assert ext["decoded_samples"] == 48000, ext
-with wave.open("samples/e2e_extracted.wav") as w:
+with wave.open("crates/injector/samples/e2e_extracted.wav") as w:
     assert w.getframerate() == 24000
     assert w.getnframes() == 48000
     raw = w.readframes(w.getnframes())

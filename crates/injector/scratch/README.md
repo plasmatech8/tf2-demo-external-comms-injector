@@ -18,11 +18,13 @@ Open with Demoman from this folder.
 
 ## Inject recipe (current CLI)
 
+From repository root:
+
 ```bash
-cargo run --release --bin inject-comms -- \
-  scratch/sultry.dem \
-  scratch/comms.wav \
-  -o scratch/sultry_with_comms.dem \
+cargo run --release -p tf2-demo-comms-injector --bin inject-comms -- \
+  crates/injector/scratch/sultry.dem \
+  crates/injector/scratch/comms.wav \
+  -o crates/injector/scratch/sultry_with_comms.dem \
   --player plasmatech8 \
   --audio-skip 0 \
   --sample-rate 24000 \
