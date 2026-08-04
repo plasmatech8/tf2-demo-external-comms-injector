@@ -34,6 +34,10 @@
 	let sourcePreviewId = $state<string | null>(null);
 	let sourcePreviewLoadingId = $state<string | null>(null);
 	let sourcePreviewHandle = $state<PreviewHandle | null>(null);
+	/** Bumped to ignore stale async demo/media/preview completions. */
+	let demoLoadGen = 0;
+	let mediaLoadGen = 0;
+	let sourcePreviewGen = 0;
 
 	const selectedPlayer = $derived(
 		players.find((p) => String(p.userId) === selectedPlayerId) ?? null
@@ -74,6 +78,7 @@
 	}
 
 	function stopSourcePreview() {
+		sourcePreviewGen += 1;
 		sourcePreviewHandle?.stop();
 		sourcePreviewHandle = null;
 		sourcePreviewId = null;
@@ -88,22 +93,32 @@
 		}
 		stopPreview();
 		stopSourcePreview();
+		const token = (sourcePreviewGen += 1);
 		sourcePreviewLoadingId = source.id;
+		const requestFile = mediaFile;
 		const primed = primeAudioContext();
 		try {
-			sourcePreviewHandle = await previewMediaSource(
-				mediaFile,
+			const handle = await previewMediaSource(
+				requestFile,
 				source,
 				() => {
+					if (token !== sourcePreviewGen) return;
 					sourcePreviewHandle = null;
 					sourcePreviewId = null;
 					sourcePreviewLoadingId = null;
 				},
 				primed
 			);
+			if (token !== sourcePreviewGen || mediaFile !== requestFile) {
+				handle.stop();
+				if (primed && primed.state !== 'closed') void primed.close().catch(() => undefined);
+				return;
+			}
+			sourcePreviewHandle = handle;
 			sourcePreviewId = source.id;
 			sourcePreviewLoadingId = null;
 		} catch (e) {
+			if (token !== sourcePreviewGen) return;
 			sourcePreviewLoadingId = null;
 			sourcePreviewId = null;
 			if (primed && primed.state !== 'closed') void primed.close().catch(() => undefined);
@@ -133,6 +148,7 @@
 	}
 
 	async function setDemoFile(file: File | null) {
+		const token = (demoLoadGen += 1);
 		demoFile = file;
 		players = [];
 		selectedPlayerId = '';
@@ -140,24 +156,31 @@
 		successMessage = null;
 		errorMessage = null;
 
-		if (!file) return;
+		if (!file) {
+			playersLoading = false;
+			return;
+		}
 
 		playersLoading = true;
 		try {
-			players = await listDemoPlayers(file);
-			if (players.length === 0) {
+			const nextPlayers = await listDemoPlayers(file);
+			if (token !== demoLoadGen || demoFile !== file) return;
+			players = nextPlayers;
+			if (nextPlayers.length === 0) {
 				playersError = 'No players found in this demo file.';
 			} else {
-				selectedPlayerId = String(players[0].userId);
+				selectedPlayerId = String(nextPlayers[0].userId);
 			}
 		} catch (e) {
+			if (token !== demoLoadGen || demoFile !== file) return;
 			playersError = e instanceof Error ? e.message : 'Failed to read players from demo file.';
 		} finally {
-			playersLoading = false;
+			if (token === demoLoadGen) playersLoading = false;
 		}
 	}
 
 	async function setMediaFile(file: File | null) {
+		const token = (mediaLoadGen += 1);
 		stopPreview();
 		stopSourcePreview();
 		mediaFile = file;
@@ -168,20 +191,25 @@
 		successMessage = null;
 		errorMessage = null;
 
-		if (!file) return;
+		if (!file) {
+			mediaLoading = false;
+			return;
+		}
 
 		mediaLoading = true;
 		try {
 			const info = await inspectMedia(file);
+			if (token !== mediaLoadGen || mediaFile !== file) return;
 			mediaInfo = info;
 			selectedSources = info.sources.filter((s) => s.defaultSelected).map((s) => s.id);
 			if (info.sources.length === 0) {
 				mediaError = info.summary || 'No audio sources found.';
 			}
 		} catch (e) {
+			if (token !== mediaLoadGen || mediaFile !== file) return;
 			mediaError = e instanceof Error ? e.message : 'Failed to inspect media file.';
 		} finally {
-			mediaLoading = false;
+			if (token === mediaLoadGen) mediaLoading = false;
 		}
 	}
 

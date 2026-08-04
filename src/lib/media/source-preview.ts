@@ -256,16 +256,25 @@ function playMediaElement(
 
 	let stopped = false;
 	let pollId = 0;
+	let notifyEnded = false;
+
+	const cleanup = () => {
+		window.clearInterval(pollId);
+		media.pause();
+		try {
+			source.disconnect();
+		} catch {
+			/* already disconnected */
+		}
+		URL.revokeObjectURL(url);
+		if (owns || primed === ctx) void ctx.close().catch(() => undefined);
+	};
 
 	const stop = () => {
 		if (stopped) return;
 		stopped = true;
-		window.clearInterval(pollId);
-		media.pause();
-		source.disconnect();
-		URL.revokeObjectURL(url);
-		if (owns || primed === ctx) void ctx.close().catch(() => undefined);
-		onEnded?.();
+		cleanup();
+		if (notifyEnded) onEnded?.();
 	};
 
 	return new Promise((resolve, reject) => {
@@ -275,6 +284,7 @@ function playMediaElement(
 					if (ctx.state === 'suspended') await ctx.resume();
 					media.currentTime = 0;
 					await media.play();
+					notifyEnded = true;
 					pollId = window.setInterval(() => {
 						if (media.currentTime >= PREVIEW_SEC || media.ended) stop();
 					}, 50);
@@ -286,7 +296,10 @@ function playMediaElement(
 				}
 			})();
 		};
-		media.onerror = () => reject(new Error('Could not load media for track preview.'));
+		media.onerror = () => {
+			stop();
+			reject(new Error('Could not load media for track preview.'));
+		};
 	});
 }
 

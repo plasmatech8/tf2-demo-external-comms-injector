@@ -31,14 +31,19 @@ function looksLikeFullMix(name: string): boolean {
 	return /all\s*audio|master|mix|full|everything/i.test(name);
 }
 
+function looksLikeGame(name: string): boolean {
+	return /\bgame\b/i.test(name) && !looksLikeComms(name) && !looksLikeFullMix(name);
+}
+
 function isGenericHandlerName(name: string): boolean {
 	return !name || /^sound\s*handler$/i.test(name) || /^audio$/i.test(name);
 }
 
+/** Prefer comms tracks; skip game audio and full mixes when multiple tracks exist. */
 function defaultTrackSelection(name: string, total: number): boolean {
 	if (total === 1) return true;
 	if (looksLikeComms(name)) return true;
-	if (looksLikeFullMix(name)) return false;
+	if (looksLikeFullMix(name) || looksLikeGame(name)) return false;
 	return true;
 }
 
@@ -178,10 +183,17 @@ function sourcesFromMp4Tracks(audioTracks: Mp4AudioTrack[]): MediaSource[] {
 	});
 
 	const hasComms = sources.some((s) => looksLikeComms(s.label));
-	const hasMix = sources.some((s) => looksLikeFullMix(s.label));
-	if (hasComms && hasMix) {
+	if (hasComms) {
+		// Only inject voice/comms by default — leave game and mixes unchecked.
 		for (const s of sources) {
 			s.defaultSelected = looksLikeComms(s.label);
+		}
+	} else {
+		const hasMix = sources.some((s) => looksLikeFullMix(s.label));
+		if (hasMix) {
+			for (const s of sources) {
+				s.defaultSelected = !looksLikeFullMix(s.label);
+			}
 		}
 	}
 
