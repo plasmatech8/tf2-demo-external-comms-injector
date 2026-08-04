@@ -30,12 +30,27 @@ export function primeAudioContext(): AudioContext | null {
 	return ctx;
 }
 
-function playBuffer(
+function mixBufferToMono(audio: AudioBuffer, maxSec: number): { samples: Float32Array; sampleRate: number } {
+	const frames = Math.min(audio.length, Math.floor(audio.sampleRate * maxSec));
+	const samples = new Float32Array(frames);
+	const ch = audio.numberOfChannels;
+	for (let c = 0; c < ch; c++) {
+		const data = audio.getChannelData(c);
+		for (let i = 0; i < frames; i++) samples[i] += data[i] / ch;
+	}
+	return { samples, sampleRate: audio.sampleRate };
+}
+
+/**
+ * Play PCM through the click-primed AudioContext.
+ * Awaits resume/start so failures surface instead of a silent "playing" UI.
+ */
+async function playBuffer(
 	samples: Float32Array,
 	sampleRate: number,
 	primed: AudioContext | null,
 	onEnded?: () => void
-): PreviewHandle {
+): Promise<PreviewHandle> {
 	const Ctor = AudioCtx();
 	if (!Ctor) throw new Error('Web Audio is required for track preview.');
 	const owns = !(primed && primed.state !== 'closed');
@@ -62,10 +77,38 @@ function playBuffer(
 	};
 
 	src.onended = () => stop();
-	void ctx.resume().then(() => {
-		if (!stopped) src.start();
-	});
+	try {
+		if (ctx.state === 'suspended') await ctx.resume();
+		if (stopped || ctx.state === 'closed') {
+			throw new Error('Audio context closed before preview could start.');
+		}
+		src.start();
+	} catch (e) {
+		stop();
+		throw e instanceof Error ? e : new Error('Could not start track preview.');
+	}
 	return { stop };
+}
+
+/** Decode a remuxed/isolated blob via Web Audio (gesture-safe) instead of media.play(). */
+async function playDecodedBlob(
+	blob: Blob,
+	primed: AudioContext | null,
+	onEnded?: () => void
+): Promise<PreviewHandle> {
+	const Ctor = AudioCtx();
+	if (!Ctor) throw new Error('Web Audio is required for track preview.');
+	const owns = !(primed && primed.state !== 'closed');
+	const ctx = owns ? new Ctor() : primed!;
+	try {
+		if (ctx.state === 'suspended') await ctx.resume();
+		const audio = await ctx.decodeAudioData(await blob.arrayBuffer());
+		const mono = mixBufferToMono(audio, PREVIEW_SEC);
+		return playBuffer(mono.samples, mono.sampleRate, ctx, onEnded);
+	} catch (e) {
+		if (owns && ctx.state !== 'closed') void ctx.close().catch(() => undefined);
+		throw e instanceof Error ? e : new Error('Could not decode track preview.');
+	}
 }
 
 /**
@@ -103,10 +146,9 @@ function playMediaElementChannel(
 
 	let stopped = false;
 	let pollId = 0;
+	let notifyEnded = false;
 
-	const stop = () => {
-		if (stopped) return;
-		stopped = true;
+	const cleanup = () => {
 		window.clearInterval(pollId);
 		media.pause();
 		try {
@@ -118,7 +160,13 @@ function playMediaElementChannel(
 		}
 		URL.revokeObjectURL(url);
 		if (owns || primed === ctx) void ctx.close().catch(() => undefined);
-		onEnded?.();
+	};
+
+	const stop = () => {
+		if (stopped) return;
+		stopped = true;
+		cleanup();
+		if (notifyEnded) onEnded?.();
 	};
 
 	return new Promise((resolve, reject) => {
@@ -128,6 +176,7 @@ function playMediaElementChannel(
 					if (ctx.state === 'suspended') await ctx.resume();
 					media.currentTime = 0;
 					await media.play();
+					notifyEnded = true;
 					pollId = window.setInterval(() => {
 						if (media.currentTime >= PREVIEW_SEC || media.ended) stop();
 					}, 50);
@@ -305,7 +354,8 @@ function playMediaElement(
 
 /**
  * Play ~8s from the start of a specific inspected source so the user can identify it.
- * MP4 tracks are remuxed alone (AAC/Opus); WAV channels read only the PCM head.
+ * Isolated MP4 tracks use remux + Web Audio decode (not media.play after a long await),
+ * so autoplay policy does not block Play on large Medal clips.
  */
 export async function previewMediaSource(
 	file: File,
@@ -319,9 +369,9 @@ export async function previewMediaSource(
 		const blob = await remuxMp4AudioTrackHead(file, source.trackId, PREVIEW_SEC);
 		if (blob) {
 			try {
-				return await playMediaElement(blob, ctx, onEnded);
+				return await playDecodedBlob(blob, ctx, onEnded);
 			} catch {
-				/* fall through to PCM decode */
+				/* fall through to demux/PCM */
 			}
 		}
 
@@ -346,5 +396,10 @@ export async function previewMediaSource(
 	}
 
 	// Single unnamed stream from inspect fallback — the file itself is the source.
-	return playMediaElement(file, ctx, onEnded);
+	// Prefer Web Audio decode when possible so we keep the click-primed context.
+	try {
+		return await playDecodedBlob(file, ctx, onEnded);
+	} catch {
+		return playMediaElement(file, ctx, onEnded);
+	}
 }

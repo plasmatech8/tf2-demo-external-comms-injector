@@ -148,7 +148,11 @@
 				previewing = false;
 				previewHandle = null;
 			});
-			if (token !== gameStartPreviewGen || mediaFile !== requestFile) {
+			if (
+				token !== gameStartPreviewGen ||
+				mediaFile !== requestFile ||
+				mediaGameStart !== requestStart
+			) {
 				handle.stop();
 				return;
 			}
