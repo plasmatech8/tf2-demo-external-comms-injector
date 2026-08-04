@@ -119,6 +119,7 @@
 			sourcePreviewHandle = handle;
 			sourcePreviewId = source.id;
 			sourcePreviewLoadingId = null;
+			errorMessage = null;
 		} catch (e) {
 			if (token !== sourcePreviewGen) return;
 			sourcePreviewLoadingId = null;
