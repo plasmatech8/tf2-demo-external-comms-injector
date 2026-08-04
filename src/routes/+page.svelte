@@ -153,6 +153,7 @@
 				return;
 			}
 			previewHandle = handle;
+			errorMessage = null;
 		} catch (e) {
 			if (token !== gameStartPreviewGen) return;
 			previewing = false;
