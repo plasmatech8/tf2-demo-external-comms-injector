@@ -130,10 +130,12 @@ export async function previewAroundGameStart(
 			};
 		});
 
-		const beepAt = ctx.currentTime + Math.max(0, gameStartSec - startAt);
-		scheduleBeep(ctx, beepAt, mediaGain, 440);
-
 		await media.play();
+
+		// Schedule after play() so the cue aligns to the AudioContext clock once
+		// media is actually outputting (not the pre-play gap).
+		const delaySec = Math.max(0, gameStartSec - media.currentTime);
+		scheduleBeep(ctx, ctx.currentTime + delaySec, mediaGain, 440);
 
 		notifyEnded = true;
 		pollId = window.setInterval(() => {

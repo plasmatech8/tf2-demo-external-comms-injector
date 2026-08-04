@@ -38,6 +38,7 @@
 	let demoLoadGen = 0;
 	let mediaLoadGen = 0;
 	let sourcePreviewGen = 0;
+	let gameStartPreviewGen = 0;
 
 	const selectedPlayer = $derived(
 		players.find((p) => String(p.userId) === selectedPlayerId) ?? null
@@ -72,6 +73,7 @@
 	});
 
 	function stopPreview() {
+		gameStartPreviewGen += 1;
 		previewHandle?.stop();
 		previewHandle = null;
 		previewing = false;
@@ -135,13 +137,23 @@
 		if (!mediaFile || !gameStartValid || mediaGameStart === null) return;
 		stopSourcePreview();
 		stopPreview();
+		const token = (gameStartPreviewGen += 1);
+		const requestFile = mediaFile;
+		const requestStart = mediaGameStart;
 		previewing = true;
 		try {
-			previewHandle = await previewAroundGameStart(mediaFile, mediaGameStart, () => {
+			const handle = await previewAroundGameStart(requestFile, requestStart, () => {
+				if (token !== gameStartPreviewGen) return;
 				previewing = false;
 				previewHandle = null;
 			});
+			if (token !== gameStartPreviewGen || mediaFile !== requestFile) {
+				handle.stop();
+				return;
+			}
+			previewHandle = handle;
 		} catch (e) {
+			if (token !== gameStartPreviewGen) return;
 			previewing = false;
 			errorMessage = e instanceof Error ? e.message : 'Preview failed.';
 		}
