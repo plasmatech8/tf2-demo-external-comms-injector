@@ -1,4 +1,6 @@
+# Build artifacts (crate-local target/; ignore root too if present)
 /target/
+/crates/injector/target/
 **/*.rs.bk
 .idea/
 .vscode/

@@ -2,7 +2,7 @@
 
 Inject external audio (WAV / converted video audio) into Team Fortress 2 `.dem` files as **Steam voice chat** (`svc_VoiceData`), so the built-in demo player can play the comms in sync.
 
-This crate lives at `crates/injector/` in the monorepo. Run Cargo commands from the **repository root** unless noted.
+This crate lives at `crates/injector/`. Run Cargo commands from **this directory** (`cd crates/injector`).
 
 ## Status
 
@@ -17,38 +17,36 @@ Working end-to-end **offline**:
 ## Quick start
 
 ```bash
-# From repository root
+cd crates/injector
+
 # Dependencies: Rust 1.85+, pkg-config, libopus (headers), ffmpeg (optional for media convert)
 export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
 
-cargo build --release -p tf2-demo-comms-injector
+cargo build --release
 
 # Download the sample STV demo used during research (demos.tf #1479677)
-./crates/injector/scripts/fetch_sample_demo.sh
+./scripts/fetch_sample_demo.sh
 
 # Inspect players / voice codec
-./target/release/inspect-demo \
-  crates/injector/samples/match-20260717-1011-koth_proot_b6c-alt2.dem
+./target/release/inspect-demo samples/match-20260717-1011-koth_proot_b6c-alt2.dem
 
 # Inject a tone as plasmatech8 (demo offset auto = teamplay_round_start, or pass --offset)
 ./target/release/inject-comms \
-  crates/injector/samples/match-20260717-1011-koth_proot_b6c-alt2.dem \
-  crates/injector/samples/test_tone_440hz.wav \
-  -o crates/injector/samples/injected.dem \
+  samples/match-20260717-1011-koth_proot_b6c-alt2.dem \
+  samples/test_tone_440hz.wav \
+  -o samples/injected.dem \
   --player plasmatech8 \
   --offset 10 \
   --loudness-db 0
 
 # Extract voice back out (offline verification)
-./target/release/extract-voice \
-  crates/injector/samples/injected.dem \
-  -o crates/injector/samples/extracted.wav
+./target/release/extract-voice samples/injected.dem -o samples/extracted.wav
 ```
 
 ### Convert arbitrary audio/video to WAV
 
 ```bash
-ffmpeg -i input.mp4 -ar 24000 -ac 1 crates/injector/samples/comms.wav
+ffmpeg -i input.mp4 -ar 24000 -ac 1 samples/comms.wav
 ```
 
 ## CLI
@@ -101,12 +99,11 @@ Against demos.tf `#1479677` + a 2s 440 Hz tone attributed to `plasmatech8`:
 | Extracted duration | 2.00 s @ 24 kHz |
 | Dominant frequency | ~440 Hz (matches source) |
 
-Run the automated suite:
+Run the automated suite from this crate directory:
 
 ```bash
-# From repository root
-cargo test -p tf2-demo-comms-injector
-./crates/injector/scripts/e2e_roundtrip.sh
+cargo test
+./scripts/e2e_roundtrip.sh
 ```
 
 ## Limits / open questions
@@ -120,6 +117,7 @@ cargo test -p tf2-demo-comms-injector
 
 ```
 crates/injector/
+  Cargo.toml / Cargo.lock / rust-toolchain.toml
   src/           library + CLIs
   docs/          format notes + research
   scripts/       sample fetch + e2e

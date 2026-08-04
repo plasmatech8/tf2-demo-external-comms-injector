@@ -1,6 +1,0 @@
-[workspace]
-resolver = "2"
-members = ["crates/injector"]
-exclude = ["crates/injector/vendor/tf-demo-parser"]
-
-# Future web app lives at repo root (SvelteKit); Rust engine stays under crates/.
