@@ -557,10 +557,33 @@ pub fn extract_voice_wav(demo_path: &Path, out_wav: &Path) -> Result<ExtractStat
     let demo = Demo::new(&file);
     let parser = tf_demo_parser::DemoParser::new_all_with_analyser(
         demo.get_stream(),
-        VoiceExtract::new(out_wav)?,
+        VoiceExtract::new(),
     );
-    let (_header, stats) = parser.parse()?;
-    Ok(stats)
+    let (_header, decoded) = parser.parse()?;
+
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: decoded.sample_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(out_wav, spec)
+        .with_context(|| format!("create wav {}", out_wav.display()))?;
+    for &sample in &decoded.pcm {
+        writer
+            .write_sample(sample)
+            .with_context(|| format!("write wav sample {}", out_wav.display()))?;
+    }
+    writer
+        .finalize()
+        .with_context(|| format!("finalize wav {}", out_wav.display()))?;
+
+    Ok(ExtractStats {
+        packets: decoded.packets,
+        decoded_samples: decoded.pcm.len(),
+        steam_ids: decoded.steam_ids.into_keys().collect(),
+        output: out_wav.display().to_string(),
+    })
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -571,32 +594,37 @@ pub struct ExtractStats {
     pub output: String,
 }
 
+struct DecodedVoice {
+    packets: usize,
+    pcm: Vec<i16>,
+    steam_ids: HashMap<u64, ()>,
+    sample_rate: u32,
+}
+
 struct VoiceExtract {
     decoder: steam_audio_codec::SteamVoiceDecoder,
     out_buffer: Vec<i16>,
     pcm: Vec<i16>,
     packets: usize,
     steam_ids: HashMap<u64, ()>,
-    path: std::path::PathBuf,
     sample_rate: u32,
 }
 
 impl VoiceExtract {
-    fn new(path: &Path) -> Result<Self> {
-        Ok(Self {
+    fn new() -> Self {
+        Self {
             decoder: steam_audio_codec::SteamVoiceDecoder::new(),
             out_buffer: vec![0; 16_384],
             pcm: Vec::new(),
             packets: 0,
             steam_ids: HashMap::new(),
-            path: path.to_path_buf(),
             sample_rate: DEFAULT_SAMPLE_RATE,
-        })
+        }
     }
 }
 
 impl tf_demo_parser::demo::parser::MessageHandler for VoiceExtract {
-    type Output = ExtractStats;
+    type Output = DecodedVoice;
 
     fn does_handle(message_type: MessageType) -> bool {
         matches!(
@@ -636,23 +664,11 @@ impl tf_demo_parser::demo::parser::MessageHandler for VoiceExtract {
     }
 
     fn into_output(self, _state: &tf_demo_parser::ParserState) -> Self::Output {
-        let spec = hound::WavSpec {
-            channels: 1,
-            sample_rate: self.sample_rate,
-            bits_per_sample: 16,
-            sample_format: hound::SampleFormat::Int,
-        };
-        if let Ok(mut w) = hound::WavWriter::create(&self.path, spec) {
-            for &s in &self.pcm {
-                let _ = w.write_sample(s);
-            }
-            let _ = w.finalize();
-        }
-        ExtractStats {
+        DecodedVoice {
             packets: self.packets,
-            decoded_samples: self.pcm.len(),
-            steam_ids: self.steam_ids.into_keys().collect(),
-            output: self.path.display().to_string(),
+            pcm: self.pcm,
+            steam_ids: self.steam_ids,
+            sample_rate: self.sample_rate,
         }
     }
 }

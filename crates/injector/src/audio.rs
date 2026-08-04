@@ -61,13 +61,15 @@ pub fn load_mono_pcm(path: &Path, target_rate: u32, loudness: Loudness) -> Resul
             .samples::<i8>()
             .map(|r| r.map(|s| (s as i16) << 8))
             .collect::<Result<Vec<_>, _>>()?,
-        24 | 32 => {
-            // hound reads 32-bit; scale down
-            reader
-                .samples::<i32>()
-                .map(|r| r.map(|s| (s >> 16) as i16))
-                .collect::<Result<Vec<_>, _>>()?
-        }
+        // hound yields i32 for both; 24-bit is sign-extended in the low 24 bits.
+        24 => reader
+            .samples::<i32>()
+            .map(|r| r.map(|s| (s >> 8) as i16))
+            .collect::<Result<Vec<_>, _>>()?,
+        32 => reader
+            .samples::<i32>()
+            .map(|r| r.map(|s| (s >> 16) as i16))
+            .collect::<Result<Vec<_>, _>>()?,
         _ => return Err(AudioError::UnsupportedFormat),
     };
 

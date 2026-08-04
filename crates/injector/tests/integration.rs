@@ -51,6 +51,33 @@ fn wav_loudness_and_load_roundtrip() {
 }
 
 #[test]
+fn wav_24bit_scales_into_audible_i16_range() {
+    use hound::{SampleFormat, WavSpec, WavWriter};
+    use tf2_demo_comms_injector::audio::{load_mono_pcm, Loudness};
+
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("t24.wav");
+    let spec = WavSpec {
+        channels: 1,
+        sample_rate: 24000,
+        bits_per_sample: 24,
+        sample_format: SampleFormat::Int,
+    };
+    {
+        let mut w = WavWriter::create(&path, spec).unwrap();
+        // Peak near full-scale 24-bit (sign-extended into i32 low 24 bits).
+        w.write_sample(4_000_000i32).unwrap();
+        w.write_sample(-4_000_000i32).unwrap();
+        w.finalize().unwrap();
+    }
+    let pcm = load_mono_pcm(&path, 24000, Loudness::from_gain(1.0)).unwrap();
+    assert_eq!(pcm.len(), 2);
+    // >> 8 keeps amplitude; >> 16 would collapse this to ~±61.
+    assert!(pcm[0].abs() > 10_000, "got {}", pcm[0]);
+    assert!(pcm[1].abs() > 10_000, "got {}", pcm[1]);
+}
+
+#[test]
 fn write_tiny_marker_file() {
     // Keeps tempfile dependency exercised in CI without needing network demos.
     let dir = tempdir().unwrap();
