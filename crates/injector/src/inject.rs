@@ -157,8 +157,19 @@ pub fn inspect_demo(path: &Path) -> Result<InspectReport> {
                     }
                 }
                 if let Message::UpdateStringTable(update) = message {
-                    // table_id resolution needs state; fall back to stringtables packet primarily
-                    let _ = update;
+                    // table_id → name comes from earlier CreateStringTable / StringTables
+                    // (updated when we handle_packet at end of each loop iteration).
+                    let is_userinfo = handler
+                        .string_table_names
+                        .get(update.table_id as usize)
+                        .is_some_and(|name| name.as_ref() == "userinfo");
+                    if is_userinfo {
+                        for (idx, entry) in &update.entries {
+                            if let Some(player) = player_from_entry(*idx, entry)? {
+                                players.insert(player.client_index, player);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -242,7 +253,10 @@ fn select_player<'a>(
         if let Some(p) = players.iter().find(|p| p.steam_id.eq_ignore_ascii_case(sid)) {
             return Ok(p);
         }
-        bail!("no player matching steam id {sid}");
+        // Fall through to --player when both were supplied; only hard-fail if name isn't set.
+        if opts.player_name.is_none() {
+            bail!("no player matching steam id {sid}");
+        }
     }
     if let Some(name) = &opts.player_name {
         let needle = name.to_lowercase();
@@ -252,7 +266,16 @@ fn select_player<'a>(
             .collect();
         match matches.as_slice() {
             [one] => return Ok(one),
-            [] => bail!("no player name containing '{name}'"),
+            [] => {
+                if opts.steam_id.is_some() {
+                    bail!(
+                        "no player matching steam id {:?} or name containing '{}'",
+                        opts.steam_id,
+                        name
+                    );
+                }
+                bail!("no player name containing '{name}'");
+            }
             many => bail!(
                 "ambiguous player name '{name}', matches: {}",
                 many.iter()
@@ -273,13 +296,17 @@ fn select_player<'a>(
 pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
     let report = inspect_demo(&opts.demo_path)?;
     let player = select_player(&report.players, &opts)?.clone();
-    let steam_id64 = match (opts.steam_id.as_deref(), player.steam_id64) {
-        (Some(s), _) => parse_steam_id(s)?,
-        (_, Some(id)) => id,
-        _ => bail!(
-            "player '{}' has no parseable steam id; pass --steam-id",
-            player.name
-        ),
+    // Attribute voice to the resolved player slot's steam id. (--steam-id is a selector;
+    // if it missed and we fell through to --player, do not stamp the unmatched id.)
+    let steam_id64 = match player.steam_id64 {
+        Some(id) => id,
+        None => match opts.steam_id.as_deref() {
+            Some(s) => parse_steam_id(s)?,
+            None => bail!(
+                "player '{}' has no parseable steam id; pass --steam-id",
+                player.name
+            ),
+        },
     };
 
     let (offset_secs, offset_source) = resolve_demo_offset(opts.offset_secs, report.round_start_secs);
@@ -375,7 +402,10 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
             has_stop = true;
         }
 
-        // Collect voice frames that belong in this Message packet (if any).
+        // Collect voice frames due by this Message packet's tick.
+        // Demos often skip ticks with no Message packet; hang each pending frame on the
+        // first packet whose tick is >= the frame's scheduled tick (may batch several
+        // frames onto one packet across a gap). Do not require an exact tick match.
         let mut frames_for_packet: Vec<Vec<u8>> = Vec::new();
         let mut strip_existing = false;
         if let Packet::Message(msg) = &packet {
@@ -670,5 +700,62 @@ impl tf_demo_parser::demo::parser::MessageHandler for VoiceExtract {
             steam_ids: self.steam_ids,
             sample_rate: self.sample_rate,
         }
+    }
+}
+
+#[cfg(test)]
+mod select_player_tests {
+    use super::*;
+    use crate::audio::Loudness;
+    use std::path::PathBuf;
+
+    fn slot(name: &str, steam_id64: u64, client_index: u8) -> PlayerSlot {
+        PlayerSlot {
+            client_index,
+            entity_id: u32::from(client_index) + 1,
+            user_id: u32::from(client_index) + 10,
+            name: name.to_string(),
+            steam_id: steam_id64.to_string(),
+            steam_id64: Some(steam_id64),
+        }
+    }
+
+    fn opts(steam_id: Option<&str>, player_name: Option<&str>) -> InjectOptions {
+        InjectOptions {
+            demo_path: PathBuf::from("x.dem"),
+            audio_path: PathBuf::from("x.wav"),
+            output_path: PathBuf::from("out.dem"),
+            offset_secs: None,
+            audio_skip_secs: 0.0,
+            loudness: Loudness::from_gain(1.0),
+            player_name: player_name.map(str::to_string),
+            steam_id: steam_id.map(str::to_string),
+            client_index: None,
+            sample_rate: crate::steam_voice::DEFAULT_SAMPLE_RATE,
+            bitrate: crate::steam_voice::DEFAULT_BITRATE,
+            replace_existing: false,
+        }
+    }
+
+    #[test]
+    fn steam_id_miss_falls_through_to_player_name() {
+        let players = vec![
+            slot("alice", 76561198000000001, 1),
+            slot("plasmatech8", 76561198081400087, 12),
+        ];
+        let chosen = select_player(
+            &players,
+            &opts(Some("76561198000000999"), Some("plasma")),
+        )
+        .unwrap();
+        assert_eq!(chosen.name, "plasmatech8");
+        assert_eq!(chosen.steam_id64, Some(76561198081400087));
+    }
+
+    #[test]
+    fn steam_id_miss_without_player_name_errors() {
+        let players = vec![slot("alice", 76561198000000001, 1)];
+        let err = select_player(&players, &opts(Some("76561198000000999"), None)).unwrap_err();
+        assert!(err.to_string().contains("steam id"), "{err}");
     }
 }
