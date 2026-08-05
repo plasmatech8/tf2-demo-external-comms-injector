@@ -22,15 +22,15 @@ From `crates/injector`:
 
 ```bash
 cargo run --release --bin inject-comms -- \
-  scratch/sultry.dem \
-  scratch/comms.wav \
-  -o scratch/sultry_with_comms.dem \
+  ../../scratch/SULTRY/sultry.dem \
+  ../../scratch/SULTRY/comms.wav \
+  -o ../../scratch/SULTRY/sultry_with_comms.dem \
   --player plasmatech8 \
   --audio-skip 0 \
   --sample-rate 24000 \
   --bitrate 64000
 ```
 
-Omit `--offset` to auto-align to `teamplay_round_start`. See [docs/timing.md](../docs/timing.md).
+Omit `--offset` to auto-align to `teamplay_round_start`. See [docs/timing.md](../crates/injector/docs/timing.md).
 
 If your WAV still includes pre-GO countdown, set `--audio-skip` to that many seconds (and don’t also ffmpeg `-ss`).

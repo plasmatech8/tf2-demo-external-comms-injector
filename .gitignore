@@ -41,8 +41,8 @@ crates/injector/samples/injected*.dem
 /tmp/
 
 # Manual-test demos / audio / video (keep README tracked)
-/crates/injector/scratch/**
-!/crates/injector/scratch/README.md
+/scratch/**
+!/scratch/README.md
 
 crates/injector/vendor/tf-demo-parser/.forgejo/
 crates/injector/vendor/tf-demo-parser/examples/
