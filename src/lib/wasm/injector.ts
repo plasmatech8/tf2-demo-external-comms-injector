@@ -25,6 +25,7 @@ export type InjectMeta = {
 	offset_source: string;
 	audio_skip_secs: number;
 	packets_injected: number;
+	packets_truncated?: number;
 	voice_init: { codec: string; quality: number; sampling_rate: number } | null;
 };
 
@@ -84,14 +85,28 @@ export async function injectCommsWasm(req: InjectRequest): Promise<InjectOutput>
 	let result: WasmInjectResult;
 	try {
 		result = inject_comms(req.demo, req.audioWav, opts);
-	} finally {
+	} catch (err) {
+		try {
+			opts.free();
+		} catch {
+			/* ignore double-free / panic-poisoned handles */
+		}
+		throw err;
+	}
+	try {
 		opts.free();
+	} catch {
+		/* ignore */
 	}
 
 	try {
 		const meta = JSON.parse(result.meta_json) as InjectMeta;
 		return { demo: result.demo, meta };
 	} finally {
-		result.free();
+		try {
+			result.free();
+		} catch {
+			/* ignore */
+		}
 	}
 }

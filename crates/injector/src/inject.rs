@@ -127,6 +127,9 @@ pub struct InjectResult {
     pub offset_source: String,
     pub audio_skip_secs: f32,
     pub packets_injected: usize,
+    /// Voice frames dropped because the demo ended before they could be scheduled.
+    #[serde(default)]
+    pub packets_truncated: usize,
     pub voice_init: Option<VoiceInitSummary>,
 }
 
@@ -441,7 +444,7 @@ pub fn inject_comms_bytes(
         })
         .collect();
 
-    let out_buffer = rewrite_demo_with_voice(
+    let (out_buffer, packets_injected) = rewrite_demo_with_voice(
         demo_bytes,
         &schedule,
         player.client_index,
@@ -449,7 +452,7 @@ pub fn inject_comms_bytes(
         opts.replace_existing,
     )?;
 
-    let packets_injected = schedule.len();
+    let packets_truncated = schedule.len().saturating_sub(packets_injected);
     Ok(InjectBytesResult {
         demo: out_buffer,
         meta: InjectResult {
@@ -460,6 +463,7 @@ pub fn inject_comms_bytes(
             offset_source: offset_source.to_string(),
             audio_skip_secs,
             packets_injected,
+            packets_truncated,
             voice_init: report.voice_init,
         },
     })
@@ -471,7 +475,7 @@ fn rewrite_demo_with_voice(
     client_index: u8,
     start_tick: u32,
     replace_existing: bool,
-) -> Result<Vec<u8>> {
+) -> Result<(Vec<u8>, usize)> {
     // Surgical rewrite: keep original packet bytes intact. For Message packets that need
     // voice, copy the packet prefix + existing net-message bits and append VoiceData,
     // without re-encoding PacketEntities (full re-encode makes TF2 refuse playdemo).
@@ -568,9 +572,9 @@ fn rewrite_demo_with_voice(
     }
 
     if sched_idx < schedule.len() {
-        bail!(
-            "demo ended before all voice frames could be placed ({} remaining). \
-             Try an earlier --offset",
+        // Medal / VODs often run longer than the demo (post-game, lobby). Place what fits.
+        eprintln!(
+            "warning: demo ended with {} voice frames remaining; truncating audio to fit",
             schedule.len() - sched_idx
         );
     }
@@ -588,7 +592,7 @@ fn rewrite_demo_with_voice(
 
     // Original header.signon is preserved (we never rewrite the signon region).
     let _ = header;
-    Ok(out_buffer)
+    Ok((out_buffer, sched_idx))
 }
 
 fn resolve_demo_offset(

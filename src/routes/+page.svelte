@@ -313,7 +313,11 @@
 			a.click();
 			URL.revokeObjectURL(url);
 
-			successMessage = `Downloaded ${outName} (${meta.packets_injected} voice packets, offset ${meta.offset_secs.toFixed(2)}s via ${meta.offset_source})`;
+			const trunc =
+				meta.packets_truncated && meta.packets_truncated > 0
+					? `, truncated ${meta.packets_truncated} (audio longer than demo)`
+					: '';
+			successMessage = `Downloaded ${outName} (${meta.packets_injected} voice packets${trunc}, offset ${meta.offset_secs.toFixed(2)}s via ${meta.offset_source})`;
 			errorMessage = null;
 		} catch (e) {
 			if (demoFile !== requestDemo || mediaFile !== requestMedia) {
@@ -321,7 +325,17 @@
 				return;
 			}
 			successMessage = null;
-			errorMessage = e instanceof Error ? e.message : 'Injection failed.';
+			if (e instanceof Error && e.message) {
+				errorMessage = e.message;
+			} else if (typeof e === 'string' && e) {
+				errorMessage = e;
+			} else {
+				try {
+					errorMessage = JSON.stringify(e) || 'Injection failed.';
+				} catch {
+					errorMessage = String(e || 'Injection failed.');
+				}
+			}
 		} finally {
 			// Always clear — even if the user swapped demo/media mid-run and we aborted.
 			generating = false;

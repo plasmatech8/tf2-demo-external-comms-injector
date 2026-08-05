@@ -152,8 +152,24 @@ pub fn inject_comms(
     options: &WasmInjectOptions,
 ) -> Result<WasmInjectResult, JsValue> {
     let opts = options.to_bytes_opts();
-    let result = inject_comms_bytes(demo, audio_wav, &opts)
-        .map_err(|e| JsValue::from_str(&format!("{e:#}")))?;
+    // Catch panics from the Opus backend so the JS side gets a Result instead of an
+    // abort + broken `free()` ("attempted to take ownership while borrowed").
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        inject_comms_bytes(demo, audio_wav, &opts)
+    }));
+    let result = match result {
+        Ok(inner) => inner.map_err(|e| JsValue::from_str(&format!("{e:#}")))?,
+        Err(payload) => {
+            let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+                (*s).to_string()
+            } else if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else {
+                "internal panic during inject_comms".to_string()
+            };
+            return Err(JsValue::from_str(&format!("injector panic: {msg}")));
+        }
+    };
     let meta_json = serde_json::to_string(&result.meta)
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
     Ok(WasmInjectResult {
