@@ -11,8 +11,13 @@
 	let { id, players, value = $bindable() }: Props = $props();
 
 	let open = $state(false);
-	let rootEl = $state<HTMLDivElement | null>(null);
-	let listEl = $state<HTMLUListElement | null>(null);
+	/** DOM refs — plain lets; only read from event handlers. */
+	let rootEl: HTMLDivElement | null = null;
+	let listEl: HTMLUListElement | null = null;
+	/** Snapshot of committed value when the list opened (Escape restores). */
+	let valueOnOpen = $state('');
+	/** Keyboard highlight while open — does not commit `value`. */
+	let highlightId = $state('');
 
 	const selected = $derived(players.find((p) => String(p.userId) === value) ?? null);
 	const selectedDot = $derived(teamDotStyle(selected?.team));
@@ -22,43 +27,64 @@
 		return `${player.name}${team} — ${player.steamId}`;
 	}
 
+	function openList() {
+		valueOnOpen = value;
+		highlightId = value;
+		open = true;
+	}
+
+	function closeList(opts?: { restore?: boolean; focusTrigger?: boolean }) {
+		if (opts?.restore) value = valueOnOpen;
+		open = false;
+		if (opts?.focusTrigger) rootEl?.querySelector('button')?.focus();
+	}
+
 	function selectPlayer(player: DemoPlayer) {
 		value = String(player.userId);
+		highlightId = value;
 		open = false;
 	}
 
 	function toggle() {
-		open = !open;
+		if (open) {
+			closeList();
+		} else {
+			openList();
+		}
 	}
 
 	function onWindowPointerDown(e: PointerEvent) {
 		if (!open || !rootEl) return;
-		if (e.target instanceof Node && !rootEl.contains(e.target)) open = false;
+		if (e.target instanceof Node && !rootEl.contains(e.target)) closeList();
+	}
+
+	function onWindowKeydown(e: KeyboardEvent) {
+		if (!open) return;
+		if (e.key === 'Escape') closeList({ restore: true });
 	}
 
 	function onTriggerKeydown(e: KeyboardEvent) {
 		if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') {
 			e.preventDefault();
-			open = true;
+			if (!open) openList();
 			queueMicrotask(() => focusActiveOption());
 		} else if (e.key === 'Escape') {
-			open = false;
+			if (open) closeList({ restore: true });
 		}
 	}
 
 	function onListKeydown(e: KeyboardEvent) {
-		const idx = players.findIndex((p) => String(p.userId) === value);
+		const idx = players.findIndex((p) => String(p.userId) === highlightId);
 		if (e.key === 'Escape') {
 			e.preventDefault();
-			open = false;
-			rootEl?.querySelector('button')?.focus();
+			closeList({ restore: true, focusTrigger: true });
 			return;
 		}
 		if (e.key === 'ArrowDown') {
 			e.preventDefault();
 			const next = players[Math.min(players.length - 1, Math.max(0, idx) + 1)];
 			if (next) {
-				value = String(next.userId);
+				highlightId = String(next.userId);
 				focusActiveOption();
 			}
 			return;
@@ -67,14 +93,16 @@
 			e.preventDefault();
 			const prev = players[Math.max(0, (idx < 0 ? 0 : idx) - 1)];
 			if (prev) {
-				value = String(prev.userId);
+				highlightId = String(prev.userId);
 				focusActiveOption();
 			}
 			return;
 		}
 		if (e.key === 'Enter' || e.key === ' ') {
 			e.preventDefault();
-			open = false;
+			const highlighted = players.find((p) => String(p.userId) === highlightId);
+			if (highlighted) selectPlayer(highlighted);
+			else closeList({ focusTrigger: true });
 			rootEl?.querySelector('button')?.focus();
 		}
 	}
@@ -84,21 +112,27 @@
 		el?.focus();
 	}
 
-	$effect(() => {
-		if (!open) return;
-		const onKey = (e: KeyboardEvent) => {
-			if (e.key === 'Escape') open = false;
-		};
-		window.addEventListener('pointerdown', onWindowPointerDown);
-		window.addEventListener('keydown', onKey);
+	function captureRoot(node: HTMLDivElement) {
+		rootEl = node;
 		return () => {
-			window.removeEventListener('pointerdown', onWindowPointerDown);
-			window.removeEventListener('keydown', onKey);
+			if (rootEl === node) rootEl = null;
 		};
-	});
+	}
+
+	function captureList(node: HTMLUListElement) {
+		listEl = node;
+		return () => {
+			if (listEl === node) listEl = null;
+		};
+	}
 </script>
 
-<div class="relative" bind:this={rootEl}>
+<svelte:window
+	onpointerdown={open ? onWindowPointerDown : undefined}
+	onkeydown={open ? onWindowKeydown : undefined}
+/>
+
+<div class="relative" {@attach captureRoot}>
 	<button
 		type="button"
 		{id}
@@ -125,7 +159,7 @@
 
 	{#if open}
 		<ul
-			bind:this={listEl}
+			{@attach captureList}
 			id="{id}-listbox"
 			class="absolute z-30 mt-1 max-h-60 w-full overflow-auto rounded border border-[var(--color-border)]
 				bg-[var(--color-surface-2)] py-1 shadow-lg"
@@ -136,7 +170,7 @@
 		>
 			{#each players as player (player.userId)}
 				{@const dot = teamDotStyle(player.team)}
-				{@const selectedOpt = String(player.userId) === value}
+				{@const selectedOpt = String(player.userId) === highlightId}
 				<li role="presentation">
 					<button
 						type="button"
