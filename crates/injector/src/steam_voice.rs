@@ -110,7 +110,7 @@ impl SteamVoiceEncoder {
 
         #[cfg(all(feature = "wasm-opus", not(feature = "native-opus")))]
         {
-            use rusty_opus::{Application, OpusEncoder, SignalType};
+            use rusty_opus::{Application, Bandwidth, OpusEncoder, SignalType};
             let mut encoder = OpusEncoder::new(sample_rate as i32, 1, Application::Voip)
                 .map_err(|e| SteamVoiceError::Opus(format!("{e:?}")))?;
             match bitrate {
@@ -120,11 +120,14 @@ impl SteamVoiceEncoder {
                 other => return Err(SteamVoiceError::InvalidBitrate(other)),
             }
             encoder.use_cbr = false;
-            // rusty-opus 0.1.x panics in CELT short-MDCT at complexity 10 on real speech
-            // ("MDCT forward: output buffer too small"). Cap below that; quality stays fine
-            // for offline demo injection. Prefer voice bias so we stay on the SILK path longer.
+            // rusty-opus 0.1.x:
+            // - complexity 10 panics on real speech (CELT short-MDCT buffer bug)
+            // - Superwideband/hybrid bitstreams decode with a loud ~10 kHz whine in
+            //   libopus / TF2. Force Wideband so packets interoperate cleanly.
             encoder.complexity = 5;
             encoder.signal_type = Some(SignalType::Voice);
+            encoder.force_bandwidth = Some(Bandwidth::Wideband);
+            encoder.max_bandwidth = Bandwidth::Wideband;
             return Ok(Self {
                 encoder,
                 sample_rate,
