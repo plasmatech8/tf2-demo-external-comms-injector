@@ -33,6 +33,26 @@ export type ExtractedAudio = {
 	trackId: number;
 };
 
+/** Progress within one full-track extract (0–1). */
+export type ExtractProgressFn = (ratio: number) => void;
+
+/** Yield to the browser event loop so long demux/decode doesn't freeze the UI. */
+function yieldToMain(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** Throttle progress emits (≥1% advance or forced). */
+function makeProgressReporter(onProgress?: ExtractProgressFn): (ratio: number, force?: boolean) => void {
+	let last = -1;
+	return (ratio: number, force = false) => {
+		if (!onProgress) return;
+		const clamped = Math.max(0, Math.min(1, ratio));
+		if (!force && clamped - last < 0.01 && clamped < 1) return;
+		last = clamped;
+		onProgress(clamped);
+	};
+}
+
 type Mp4AudioTrackInfo = {
 	id: number;
 	name?: string;
@@ -422,12 +442,27 @@ export async function extractMp4AudioTrackHeads(
 export async function extractMp4AudioTrackFull(
 	file: File,
 	trackId: number,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	onProgress?: ExtractProgressFn
 ): Promise<ExtractedAudio | null> {
-	const collected = await collectTrackSamples(file, trackId, Number.POSITIVE_INFINITY, signal);
+	const report = makeProgressReporter(onProgress);
+	report(0, true);
+	const collected = await collectTrackSamples(
+		file,
+		trackId,
+		Number.POSITIVE_INFINITY,
+		signal,
+		report
+	);
 	if (!collected) return null;
-	const decoded = await decodeCollectedTrack(collected, Number.POSITIVE_INFINITY);
+	report(0.8, true);
+	const decoded = await decodeCollectedTrack(
+		collected,
+		Number.POSITIVE_INFINITY,
+		report
+	);
 	if (!decoded || decoded.samples.length < decoded.sampleRate * 0.1) return null;
+	report(1, true);
 	return {
 		samples: decoded.samples,
 		sampleRate: decoded.sampleRate,
@@ -498,7 +533,8 @@ function findAscInDescriptionBoxes(boxes: unknown[]): Uint8Array | undefined {
 
 async function decodeCollectedTrack(
 	collected: { meta: TrackRemuxMeta; samples: CollectedSample[] },
-	maxSec: number
+	maxSec: number,
+	report?: (ratio: number, force?: boolean) => void
 ): Promise<{ samples: Float32Array; sampleRate: number } | null> {
 	const { meta, samples } = collected;
 	if (!samples.length) return null;
@@ -519,6 +555,8 @@ async function decodeCollectedTrack(
 		codec.includes('aac') ||
 		codec.includes('40.')
 	) {
+		// decodeAudioData is atomic — nudge mid-decode then finish at 1.0 in the caller.
+		report?.(0.85, true);
 		const asc = findAscInDescriptionBoxes(meta.descriptionBoxes);
 		const adts = samplesToAdts(asSamples, asc, meta.sampleRate, meta.channelCount, maxSec);
 		const decoded = await decodeAdts(adts, maxSec);
@@ -545,7 +583,8 @@ async function decodeCollectedTrack(
 				}
 			})
 		},
-		maxSec
+		maxSec,
+		report
 	);
 }
 
@@ -553,7 +592,8 @@ async function collectTrackSamples(
 	file: File,
 	trackId: number,
 	maxSec: number,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	report?: (ratio: number, force?: boolean) => void
 ): Promise<{ meta: TrackRemuxMeta; samples: CollectedSample[] } | null> {
 	throwIfAborted(signal);
 	const { createFile, MP4BoxBuffer } = await import('mp4box');
@@ -567,6 +607,7 @@ async function collectTrackSamples(
 
 	const samples: CollectedSample[] = [];
 	let meta: TrackRemuxMeta | null = null;
+	const YIELD_EVERY = 6;
 
 	const ready = new Promise<void>((resolve, reject) => {
 		mp4.onError = (msg: string) => reject(new Error(msg || 'MP4 parse failed'));
@@ -635,10 +676,12 @@ async function collectTrackSamples(
 	const maxChunks = Math.ceil(file.size / MP4_CHUNK_SIZE) + 16;
 
 	// Pass 1: find moov. Medal/ffmpeg often put moov at the end — probe the tail first.
+	report?.(0.02);
 	const tailBytes = Math.min(file.size, 8 * MP4_CHUNK_SIZE);
 	if (tailBytes > 0) {
 		await appendRange(file.size - tailBytes, file.size);
 	}
+	report?.(0.08);
 
 	if (!mp4.moov) {
 		let offset = 0;
@@ -647,14 +690,25 @@ async function collectTrackSamples(
 		while (!mp4.moov && offset < stopBeforeTail && guard < maxChunks) {
 			guard += 1;
 			offset = await appendRange(offset, Math.min(offset + MP4_CHUNK_SIZE, stopBeforeTail));
+			// finding moov / pass 1: up to ~0.18
+			const pass1 =
+				stopBeforeTail > 0 ? Math.min(1, offset / stopBeforeTail) : 1;
+			report?.(0.08 + pass1 * 0.1);
+			if (guard % YIELD_EVERY === 0) {
+				await yieldToMain();
+				throwIfAborted(signal);
+				report?.(0.08 + pass1 * 0.1, true);
+			}
 		}
 	}
 
+	report?.(0.18);
 	try {
 		await ready;
 	} catch {
 		return null;
 	}
+	report?.(0.2, true);
 
 	// Pass 2: if mdat came before moov, payloads were discarded — re-read from the start
 	// with extraction already armed so onSamples receives real data.
@@ -669,6 +723,14 @@ async function collectTrackSamples(
 			} catch {
 				offset = end;
 			}
+			// pass 2 demux: map offset/file.size onto ~0.2–0.8
+			const fileSize = Math.max(1, file.size);
+			report?.(0.2 + Math.min(1, offset / fileSize) * 0.6);
+			if (guard % YIELD_EVERY === 0) {
+				await yieldToMain();
+				throwIfAborted(signal);
+				report?.(0.2 + Math.min(1, offset / fileSize) * 0.6, true);
+			}
 		}
 	}
 
@@ -679,6 +741,7 @@ async function collectTrackSamples(
 		/* ignore */
 	}
 
+	report?.(0.8, true);
 	if (!meta || samples.length === 0) return null;
 	return { meta, samples };
 }
@@ -688,7 +751,8 @@ async function decodeWithWebCodecs(
 	track: Mp4AudioTrackInfo,
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	mp4: any,
-	maxSec: number
+	maxSec: number,
+	report?: (ratio: number, force?: boolean) => void
 ): Promise<{ samples: Float32Array; sampleRate: number } | null> {
 	if (typeof AudioDecoder === 'undefined' || typeof EncodedAudioChunk === 'undefined') return null;
 
@@ -721,6 +785,8 @@ async function decodeWithWebCodecs(
 	const maxFrames = Number.isFinite(maxSec)
 		? Math.ceil(sampleRate * maxSec)
 		: Number.MAX_SAFE_INTEGER;
+	const DECODE_YIELD_EVERY = 200;
+	const totalSamples = Math.max(1, samples.length);
 
 	try {
 		await new Promise<void>((resolve, reject) => {
@@ -751,33 +817,47 @@ async function decodeWithWebCodecs(
 				error: (e) => reject(e)
 			});
 			decoder.configure(config);
-			for (const sample of samples) {
-				if (frames >= maxFrames) break;
-				if (pastDurationCap(sample.cts, sample.timescale, maxSec, 0.25)) break;
-				const data =
-					sample.data instanceof Uint8Array
-						? sample.data
-						: new Uint8Array(
-								sample.data instanceof ArrayBuffer
-									? sample.data
-									: Uint8Array.from(sample.data as ArrayLike<number>)
-							);
-				decoder.decode(
-					new EncodedAudioChunk({
-						type: sample.is_sync ? 'key' : 'delta',
-						timestamp: Math.round((sample.cts / sample.timescale) * 1e6),
-						duration: Math.round((sample.duration / sample.timescale) * 1e6),
-						data
-					})
-				);
-			}
-			decoder
-				.flush()
-				.then(() => {
+
+			void (async () => {
+				try {
+					for (let i = 0; i < samples.length; i++) {
+						const sample = samples[i]!;
+						if (frames >= maxFrames) break;
+						if (pastDurationCap(sample.cts, sample.timescale, maxSec, 0.25)) break;
+						const data =
+							sample.data instanceof Uint8Array
+								? sample.data
+								: new Uint8Array(
+										sample.data instanceof ArrayBuffer
+											? sample.data
+											: Uint8Array.from(sample.data as ArrayLike<number>)
+									);
+						decoder.decode(
+							new EncodedAudioChunk({
+								type: sample.is_sync ? 'key' : 'delta',
+								timestamp: Math.round((sample.cts / sample.timescale) * 1e6),
+								duration: Math.round((sample.duration / sample.timescale) * 1e6),
+								data
+							})
+						);
+						if ((i + 1) % DECODE_YIELD_EVERY === 0) {
+							report?.(0.8 + Math.min(1, (i + 1) / totalSamples) * 0.2);
+							await yieldToMain();
+							report?.(0.8 + Math.min(1, (i + 1) / totalSamples) * 0.2, true);
+						}
+					}
+					await decoder.flush();
 					decoder.close();
 					resolve();
-				})
-				.catch(reject);
+				} catch (e) {
+					try {
+						decoder.close();
+					} catch {
+						/* ignore */
+					}
+					reject(e);
+				}
+			})();
 		});
 	} catch {
 		return null;

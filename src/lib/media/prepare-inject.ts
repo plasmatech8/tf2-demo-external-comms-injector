@@ -264,12 +264,20 @@ export async function prepareInjectWav(
 		const tracks: { samples: Float32Array; sampleRate: number }[] = [];
 		for (let i = 0; i < n; i++) {
 			const src = selected[i]!;
-			// Leave headroom for mixing (~0.9–1.0).
-			onProgress?.(`Decoding ${src.label}…`, (i / n) * 0.9);
-			const extracted = await extractMp4AudioTrackFull(file, src.trackId!);
-			if (!extracted) throw new Error(`Could not extract audio from ${src.label}.`);
+			const label = src.label;
+			// Leave headroom for mixing (~0.9–1.0); local 0–1 maps into this track's slice.
+			onProgress?.(`Decoding ${label}…`, (i / n) * 0.9);
+			const extracted = await extractMp4AudioTrackFull(
+				file,
+				src.trackId!,
+				undefined,
+				(local) => {
+					onProgress?.(`Decoding ${label}…`, ((i + local) / n) * 0.9);
+				}
+			);
+			if (!extracted) throw new Error(`Could not extract audio from ${label}.`);
 			tracks.push({ samples: extracted.samples, sampleRate: extracted.sampleRate });
-			onProgress?.(`Decoding ${src.label}…`, ((i + 1) / n) * 0.9);
+			onProgress?.(`Decoding ${label}…`, ((i + 1) / n) * 0.9);
 		}
 		const targetRate = Math.max(...tracks.map((t) => t.sampleRate));
 		onProgress?.('Mixing tracks…', 0.95);
