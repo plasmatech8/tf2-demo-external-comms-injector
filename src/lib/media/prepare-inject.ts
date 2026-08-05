@@ -242,39 +242,50 @@ function tooLargeMessage(file: File): string {
 }
 
 /**
+ * Progress within the prepare phase. `ratio` is 0–1 (optional for backward compatibility).
+ */
+export type PrepareProgressFn = (msg: string, ratio?: number) => void;
+
+/**
  * Decode selected tracks/channels into a mono PCM WAV suitable for the Rust injector.
  */
 export async function prepareInjectWav(
 	file: File,
 	sources: MediaSource[],
 	selectedIds: string[],
-	onProgress?: (msg: string) => void
+	onProgress?: PrepareProgressFn
 ): Promise<Uint8Array> {
 	const selected = sources.filter((s) => selectedIds.includes(s.id));
 	if (selected.length === 0) throw new Error('Select at least one audio track or channel.');
 
 	if (isMp4Family(file) && selected.every((s) => typeof s.trackId === 'number')) {
-		onProgress?.('Extracting audio tracks…');
+		const n = selected.length;
+		onProgress?.('Extracting audio tracks…', 0);
 		const tracks: { samples: Float32Array; sampleRate: number }[] = [];
-		for (const src of selected) {
-			onProgress?.(`Decoding ${src.label}…`);
+		for (let i = 0; i < n; i++) {
+			const src = selected[i]!;
+			// Leave headroom for mixing (~0.9–1.0).
+			onProgress?.(`Decoding ${src.label}…`, (i / n) * 0.9);
 			const extracted = await extractMp4AudioTrackFull(file, src.trackId!);
 			if (!extracted) throw new Error(`Could not extract audio from ${src.label}.`);
 			tracks.push({ samples: extracted.samples, sampleRate: extracted.sampleRate });
+			onProgress?.(`Decoding ${src.label}…`, ((i + 1) / n) * 0.9);
 		}
 		const targetRate = Math.max(...tracks.map((t) => t.sampleRate));
-		onProgress?.('Mixing tracks…');
+		onProgress?.('Mixing tracks…', 0.95);
 		const aligned = tracks.map((t) => resampleLinear(t.samples, t.sampleRate, targetRate));
+		onProgress?.('Mixing tracks…', 1);
 		return encodeMonoWav(mixMono(aligned), targetRate);
 	}
 
 	// WAV: read PCM directly (no decodeAudioData), including larger files.
 	if (isWav(file)) {
-		onProgress?.('Reading WAV…');
+		onProgress?.('Reading WAV…', 0.15);
 		const indexes = selected
 			.map((s) => s.channelIndex)
 			.filter((n): n is number => typeof n === 'number');
 		const { samples, sampleRate } = await loadWavChannels(file, indexes);
+		onProgress?.('Reading WAV…', 1);
 		return encodeMonoWav(samples, sampleRate);
 	}
 
@@ -283,20 +294,22 @@ export async function prepareInjectWav(
 		throw new Error(tooLargeMessage(file));
 	}
 
-	onProgress?.('Decoding media…');
+	onProgress?.('Decoding media…', 0.1);
 	const audio = await decodeWholeFile(file);
 
 	if (selected.some((s) => typeof s.channelIndex === 'number')) {
 		const indexes = selected
 			.map((s) => s.channelIndex)
 			.filter((n): n is number => typeof n === 'number');
-		onProgress?.('Mixing channels…');
+		onProgress?.('Mixing channels…', 0.85);
 		const mono = mixBufferChannels(audio, indexes);
+		onProgress?.('Mixing channels…', 1);
 		return encodeMonoWav(mono, audio.sampleRate);
 	}
 
 	// Fallback: full mix of the decoded file.
-	onProgress?.('Downmixing…');
+	onProgress?.('Downmixing…', 0.85);
 	const mono = mixBufferChannels(audio, []);
+	onProgress?.('Downmixing…', 1);
 	return encodeMonoWav(mono, audio.sampleRate);
 }

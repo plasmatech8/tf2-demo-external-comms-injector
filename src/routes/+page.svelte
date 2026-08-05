@@ -4,6 +4,7 @@
 	import FileField from '$lib/components/FileField.svelte';
 	import Hint from '$lib/components/Hint.svelte';
 	import LoadingStatus from '$lib/components/LoadingStatus.svelte';
+	import ProgressBar from '$lib/components/ProgressBar.svelte';
 	import { listDemoPlayers, type DemoPlayer } from '$lib/demo/players';
 	import { previewAroundGameStart, type PreviewHandle } from '$lib/media/preview';
 	import { previewMediaSource, primeAudioContext } from '$lib/media/source-preview';
@@ -17,6 +18,9 @@
 	let selectedSources = $state<string[]>([]);
 	let notesOpen = $state(false);
 	let generating = $state(false);
+	/** 0–100 while generating; cleared when idle. */
+	let generateProgress = $state(0);
+	let generateStatus = $state('');
 	let successMessage = $state<string | null>(null);
 	let errorMessage = $state<string | null>(null);
 	let ready = $state(false);
@@ -249,6 +253,12 @@
 		return `${player.name}${team}`;
 	}
 
+	/** Map overall generate progress; status drives the bar label. */
+	function setGenerateProgress(status: string, percent: number) {
+		generateStatus = status;
+		generateProgress = Math.min(100, Math.max(0, percent));
+	}
+
 	async function onGenerate() {
 		if (!canGenerate || !demoFile || !mediaFile || !selectedPlayer || !gameStartValid) return;
 		if (mediaGameStart === null) return;
@@ -256,6 +266,7 @@
 		generating = true;
 		successMessage = null;
 		errorMessage = null;
+		setGenerateProgress('Loading modules…', 2);
 		stopPreview();
 		stopSourcePreview();
 
@@ -266,30 +277,33 @@
 		const requestStart = mediaGameStart;
 		const requestSources = [...selectedSources];
 		const sourcesSnapshot = mediaInfo?.sources ?? [];
+		const stillCurrent = () => demoFile === requestDemo && mediaFile === requestMedia;
 
 		try {
 			const [{ prepareInjectWav }, { injectCommsWasm }] = await Promise.all([
 				import('$lib/media/prepare-inject'),
 				import('$lib/wasm/injector')
 			]);
+			if (!stillCurrent()) return;
+			setGenerateProgress('Preparing audio…', 5);
 
 			const audioWav = await prepareInjectWav(
 				requestMedia,
 				sourcesSnapshot,
 				requestSources,
-				(msg) => {
-					if (demoFile === requestDemo && mediaFile === requestMedia) {
-						successMessage = msg;
-					}
+				(msg, ratio = 0) => {
+					if (!stillCurrent()) return;
+					// Prepare phase maps onto ~5–70%.
+					setGenerateProgress(msg, 5 + Math.min(1, Math.max(0, ratio)) * 65);
 				}
 			);
-			if (demoFile !== requestDemo || mediaFile !== requestMedia) {
-				successMessage = null;
-				return;
-			}
-			successMessage = 'Injecting voice into demo…';
+			if (!stillCurrent()) return;
 
+			setGenerateProgress('Reading demo…', 72);
 			const demoBytes = new Uint8Array(await requestDemo.arrayBuffer());
+			if (!stillCurrent()) return;
+
+			setGenerateProgress('Injecting voice into demo…', 78);
 			const { demo, meta } = await injectCommsWasm({
 				demo: demoBytes,
 				audioWav,
@@ -300,10 +314,9 @@
 				bitrate: 64_000
 			});
 
-			if (demoFile !== requestDemo || mediaFile !== requestMedia) {
-				successMessage = null;
-				return;
-			}
+			if (!stillCurrent()) return;
+
+			setGenerateProgress('Downloading…', 95);
 
 			const blob = new Blob([demo.slice()], { type: 'application/octet-stream' });
 			const url = URL.createObjectURL(blob);
@@ -313,17 +326,18 @@
 			a.click();
 			URL.revokeObjectURL(url);
 
+			setGenerateProgress('Done', 100);
+
 			const trunc =
 				meta.packets_truncated && meta.packets_truncated > 0
 					? `, truncated ${meta.packets_truncated} (audio longer than demo)`
 					: '';
 			successMessage = `Downloaded ${outName} (${meta.packets_injected} voice packets${trunc}, offset ${meta.offset_secs.toFixed(2)}s via ${meta.offset_source})`;
 			errorMessage = null;
+			// Let the bar paint at 100% briefly before generating clears.
+			await new Promise((r) => setTimeout(r, 280));
 		} catch (e) {
-			if (demoFile !== requestDemo || mediaFile !== requestMedia) {
-				successMessage = null;
-				return;
-			}
+			if (!stillCurrent()) return;
 			successMessage = null;
 			if (e instanceof Error && e.message) {
 				errorMessage = e.message;
@@ -339,6 +353,8 @@
 		} finally {
 			// Always clear — even if the user swapped demo/media mid-run and we aborted.
 			generating = false;
+			generateProgress = 0;
+			generateStatus = '';
 		}
 	}
 
@@ -552,20 +568,21 @@
 				<button
 					type="submit"
 					disabled={!canGenerate}
+					aria-busy={generating}
 					class="w-full rounded border border-transparent bg-[var(--color-accent)] px-4 py-3
 						font-[family-name:var(--font-display)] text-lg font-semibold tracking-wider text-[var(--color-fg-strong)] uppercase
 						transition-[background-color,transform,opacity] duration-150
 						enabled:hover:bg-[var(--color-accent-hover)] enabled:active:scale-[0.98]
 						disabled:cursor-not-allowed disabled:opacity-40"
 				>
-					{#if generating}
-						Generating…
-					{:else}
-						Generate &amp; download
-					{/if}
+					{generating ? 'Generating…' : 'Generate & download'}
 				</button>
 
-				{#if successMessage}
+				{#if generating}
+					<div class="mt-3" transition:fade={{ duration: 160 }}>
+						<ProgressBar value={generateProgress} label={generateStatus || 'Working…'} />
+					</div>
+				{:else if successMessage}
 					<p
 						class="mt-3 text-sm text-[var(--color-success)]"
 						role="status"
