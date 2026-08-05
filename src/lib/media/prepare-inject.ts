@@ -212,26 +212,23 @@ async function loadWavChannels(
 
 	const out = new Float32Array(frames);
 	const scale = 1 / pick.length;
+	const readSample = (o: number): number => {
+		if (bitsPerSample === 8) return (view.getUint8(o) - 128) / 128;
+		if (bitsPerSample === 16) return view.getInt16(o, true) / 32768;
+		if (bitsPerSample === 24) {
+			const b0 = view.getUint8(o);
+			const b1 = view.getUint8(o + 1);
+			const b2 = view.getUint8(o + 2);
+			let v = (b2 << 16) | (b1 << 8) | b0;
+			if (v & 0x800000) v |= ~0xffffff;
+			return v / 8388608;
+		}
+		return view.getInt32(o, true) / 2147483648;
+	};
 	for (let f = 0; f < frames; f++) {
 		let sum = 0;
 		for (const ch of pick) {
-			const o = dataOffset + f * frameBytes + ch * bytesPerSample;
-			let s = 0;
-			if (bitsPerSample === 8) {
-				s = (view.getUint8(o) - 128) / 128;
-			} else if (bitsPerSample === 16) {
-				s = view.getInt16(o, true) / 32768;
-			} else if (bitsPerSample === 24) {
-				const b0 = view.getUint8(o);
-				const b1 = view.getUint8(o + 1);
-				const b2 = view.getUint8(o + 2);
-				let v = (b2 << 16) | (b1 << 8) | b0;
-				if (v & 0x800000) v |= ~0xffffff;
-				s = v / 8388608;
-			} else {
-				s = view.getInt32(o, true) / 2147483648;
-			}
-			sum += s;
+			sum += readSample(dataOffset + f * frameBytes + ch * bytesPerSample);
 		}
 		out[f] = sum * scale;
 	}
