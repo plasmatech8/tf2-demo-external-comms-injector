@@ -16,7 +16,6 @@
 	let mediaGameStart = $state<number | null>(5);
 	let selectedPlayerId = $state('');
 	let selectedSources = $state<string[]>([]);
-	let notesOpen = $state(false);
 	let generating = $state(false);
 	/** 0–100 while generating; cleared when idle. */
 	let generateProgress = $state(0);
@@ -597,33 +596,4 @@
 			</div>
 		</form>
 	</div>
-
-	<footer class="mt-10 border-t border-[var(--color-border)] pt-6 pb-2">
-		<button
-			type="button"
-			class="flex w-full items-center justify-between text-left text-xs tracking-wide text-[var(--color-muted)] uppercase
-				hover:text-[var(--color-fg)]"
-			aria-expanded={notesOpen}
-			onclick={() => (notesOpen = !notesOpen)}
-		>
-			<span>Notes / coming soon</span>
-			<span aria-hidden="true">{notesOpen ? '−' : '+'}</span>
-		</button>
-
-		{#if notesOpen}
-			<ul
-				class="mt-3 list-disc space-y-1 pl-4 text-xs leading-relaxed text-[var(--color-muted)]"
-				transition:slide={{ duration: 160 }}
-			>
-				<li>
-					Generate runs the Rust injector in your browser (WASM). Files never leave this device.
-				</li>
-				<li>Track inspect reads MP4 metadata in chunks (not the whole video).</li>
-				<li>
-					Demo timeline offset defaults to <code>teamplay_round_start</code>; game start skips
-					pre-GO audio in your recording.
-				</li>
-			</ul>
-		{/if}
-	</footer>
 </main>
