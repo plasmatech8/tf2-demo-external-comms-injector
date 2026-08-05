@@ -278,9 +278,15 @@
 				sourcesSnapshot,
 				requestSources,
 				(msg) => {
-					successMessage = msg;
+					if (demoFile === requestDemo && mediaFile === requestMedia) {
+						successMessage = msg;
+					}
 				}
 			);
+			if (demoFile !== requestDemo || mediaFile !== requestMedia) {
+				successMessage = null;
+				return;
+			}
 			successMessage = 'Injecting voice into demo…';
 
 			const demoBytes = new Uint8Array(await requestDemo.arrayBuffer());
@@ -294,7 +300,10 @@
 				bitrate: 64_000
 			});
 
-			if (demoFile !== requestDemo || mediaFile !== requestMedia) return;
+			if (demoFile !== requestDemo || mediaFile !== requestMedia) {
+				successMessage = null;
+				return;
+			}
 
 			const blob = new Blob([demo.slice()], { type: 'application/octet-stream' });
 			const url = URL.createObjectURL(blob);
@@ -307,7 +316,10 @@
 			successMessage = `Downloaded ${outName} (${meta.packets_injected} voice packets, offset ${meta.offset_secs.toFixed(2)}s via ${meta.offset_source})`;
 			errorMessage = null;
 		} catch (e) {
-			if (demoFile !== requestDemo || mediaFile !== requestMedia) return;
+			if (demoFile !== requestDemo || mediaFile !== requestMedia) {
+				successMessage = null;
+				return;
+			}
 			successMessage = null;
 			errorMessage = e instanceof Error ? e.message : 'Injection failed.';
 		} finally {

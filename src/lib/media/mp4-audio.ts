@@ -5,6 +5,27 @@
 
 const MP4_CHUNK_SIZE = 1024 * 1024;
 
+/** Non-finite `maxSec` means demux/decode until EOF (full inject extract). */
+function pastDurationCap(
+	cts: number,
+	timescale: number,
+	maxSec: number,
+	slackSec: number
+): boolean {
+	if (!Number.isFinite(maxSec)) return false;
+	return cts / timescale > maxSec + slackSec;
+}
+
+function reachedDurationCap(
+	cts: number,
+	timescale: number,
+	maxSec: number,
+	slackSec: number
+): boolean {
+	if (!Number.isFinite(maxSec)) return false;
+	return cts / timescale >= maxSec - slackSec;
+}
+
 export type ExtractedAudio = {
 	samples: Float32Array;
 	sampleRate: number;
@@ -176,7 +197,7 @@ function samplesToAdts(
 	let total = 0;
 
 	for (const sample of samples) {
-		if (sample.cts / sample.timescale > maxSec + 0.5) break;
+		if (pastDurationCap(sample.cts, sample.timescale, maxSec, 0.5)) break;
 		const payload = sample.data instanceof Uint8Array ? sample.data : new Uint8Array(sample.data);
 		const frameLen = 7 + payload.length;
 		const header = new Uint8Array(7);
@@ -214,7 +235,8 @@ declare global {
 
 function mixToMono(buffer: AudioBuffer, maxSec: number): Float32Array {
 	const rate = buffer.sampleRate;
-	const frames = Math.min(buffer.length, Math.floor(rate * maxSec));
+	const capped = Number.isFinite(maxSec) ? Math.floor(rate * maxSec) : buffer.length;
+	const frames = Math.min(buffer.length, capped);
 	const mono = new Float32Array(frames);
 	const ch = buffer.numberOfChannels;
 	for (let c = 0; c < ch; c++) {
@@ -309,7 +331,7 @@ export async function extractMp4AudioTrackHeads(
 				const list = collected.get(id);
 				if (!list) return;
 				for (const sample of samples) {
-					if (sample.cts / sample.timescale > maxSec + 0.75) continue;
+					if (pastDurationCap(sample.cts, sample.timescale, maxSec, 0.75)) continue;
 					// Copy payload — mp4box reuses underlying buffers across batches.
 					const raw = sample.data;
 					const data =
@@ -348,7 +370,7 @@ export async function extractMp4AudioTrackHeads(
 				const list = collected.get(t.id) ?? [];
 				if (list.length === 0) return false;
 				const last = list[list.length - 1];
-				return last.cts / last.timescale >= maxSec - 0.05;
+				return reachedDurationCap(last.cts, last.timescale, maxSec, 0.05);
 			});
 			if (enough) break;
 		}
@@ -396,21 +418,15 @@ export async function extractMp4AudioTrackHeads(
 	return out;
 }
 
-/** Max duration pulled for a full-track inject extract (2 hours). */
-const FULL_EXTRACT_MAX_SEC = 2 * 60 * 60;
-
-/**
- * Demux + decode an entire MP4 audio track (or up to {@link FULL_EXTRACT_MAX_SEC}).
- * Used when preparing inject audio from Medal / multi-track recordings.
- */
+/** Demux + decode an entire MP4 audio track until EOF (no silent duration cap). */
 export async function extractMp4AudioTrackFull(
 	file: File,
 	trackId: number,
 	signal?: AbortSignal
 ): Promise<ExtractedAudio | null> {
-	const collected = await collectTrackSamples(file, trackId, FULL_EXTRACT_MAX_SEC, signal);
+	const collected = await collectTrackSamples(file, trackId, Number.POSITIVE_INFINITY, signal);
 	if (!collected) return null;
-	const decoded = await decodeCollectedTrack(collected, FULL_EXTRACT_MAX_SEC);
+	const decoded = await decodeCollectedTrack(collected, Number.POSITIVE_INFINITY);
 	if (!decoded || decoded.samples.length < decoded.sampleRate * 0.1) return null;
 	return {
 		samples: decoded.samples,
@@ -579,7 +595,7 @@ async function collectTrackSamples(
 			};
 			mp4.onSamples = (_id: number, _user: unknown, batch: Sample[]) => {
 				for (const sample of batch) {
-					if (sample.cts / sample.timescale > maxSec + 0.5) continue;
+					if (pastDurationCap(sample.cts, sample.timescale, maxSec, 0.5)) continue;
 					const data = copySampleData(sample.data);
 					if (!data.byteLength) continue;
 					samples.push({
@@ -610,9 +626,8 @@ async function collectTrackSamples(
 	const enoughSamples = () => {
 		if (samples.length === 0) return false;
 		const last = samples[samples.length - 1];
-		// Preview callers pass maxSec ≈ 8; full inject passes a large maxSec and must
-		// read until that duration (or EOF via the append loops below).
-		return last.cts / last.timescale >= maxSec - 0.05;
+		// Preview: stop near maxSec. Full inject passes +Infinity → read until EOF.
+		return reachedDurationCap(last.cts, last.timescale, maxSec, 0.05);
 	};
 
 	// Bound chunk loops by file size (not a fixed ~1.5GB cap) so multi-GB Medal
@@ -703,7 +718,9 @@ async function decodeWithWebCodecs(
 	const chunks: Float32Array[] = [];
 	let outRate = sampleRate;
 	let frames = 0;
-	const maxFrames = Math.ceil(sampleRate * maxSec);
+	const maxFrames = Number.isFinite(maxSec)
+		? Math.ceil(sampleRate * maxSec)
+		: Number.MAX_SAFE_INTEGER;
 
 	try {
 		await new Promise<void>((resolve, reject) => {
@@ -736,7 +753,7 @@ async function decodeWithWebCodecs(
 			decoder.configure(config);
 			for (const sample of samples) {
 				if (frames >= maxFrames) break;
-				if (sample.cts / sample.timescale > maxSec + 0.25) break;
+				if (pastDurationCap(sample.cts, sample.timescale, maxSec, 0.25)) break;
 				const data =
 					sample.data instanceof Uint8Array
 						? sample.data
