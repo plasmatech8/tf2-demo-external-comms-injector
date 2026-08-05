@@ -45,6 +45,8 @@
 	let mediaLoadGen = 0;
 	let sourcePreviewGen = 0;
 	let gameStartPreviewGen = 0;
+	/** Cancels in-flight prepare when demo/media is swapped or Generate restarts. */
+	let generateAbort: AbortController | null = null;
 
 	const selectedPlayer = $derived(
 		players.find((p) => String(p.userId) === selectedPlayerId) ?? null
@@ -155,8 +157,11 @@
 	}
 
 	function onGameStartInput(e: Event) {
-		const draft = sanitizeGameStartDraft((e.currentTarget as HTMLInputElement).value);
+		const el = e.currentTarget as HTMLInputElement;
+		const draft = sanitizeGameStartDraft(el.value);
 		gameStartDraft = draft;
+		// Force DOM sync when Svelte skips the update (draft unchanged after sanitize).
+		if (el.value !== draft) el.value = draft;
 		syncMediaGameStartFromDraft(draft);
 	}
 
@@ -209,6 +214,8 @@
 
 	async function setDemoFile(file: File | null) {
 		const token = (demoLoadGen += 1);
+		generateAbort?.abort();
+		generateAbort = null;
 		demoFile = file;
 		players = [];
 		selectedPlayerId = '';
@@ -243,6 +250,8 @@
 		const token = (mediaLoadGen += 1);
 		stopPreview();
 		stopSourcePreview();
+		generateAbort?.abort();
+		generateAbort = null;
 		mediaFile = file;
 		mediaInfo = null;
 		selectedSources = [];
@@ -303,6 +312,10 @@
 		if (!canGenerate || !demoFile || !mediaFile || !selectedPlayer || !gameStartValid) return;
 		if (mediaGameStart === null) return;
 
+		generateAbort?.abort();
+		generateAbort = new AbortController();
+		const signal = generateAbort.signal;
+
 		generating = true;
 		successMessage = null;
 		errorMessage = null;
@@ -337,7 +350,8 @@
 					if (!stillCurrent()) return;
 					// Prepare phase maps onto ~5–70%.
 					setGenerateProgress(msg, 5 + Math.min(1, Math.max(0, ratio)) * 65);
-				}
+				},
+				signal
 			);
 			if (!stillCurrent()) return;
 
@@ -384,7 +398,9 @@
 			// Let the bar paint at 100% briefly before generating clears.
 			await new Promise((r) => setTimeout(r, 280));
 		} catch (e) {
-			if (!stillCurrent()) return;
+			const isAbort =
+				(e instanceof DOMException || e instanceof Error) && e.name === 'AbortError';
+			if (isAbort || !stillCurrent()) return;
 			successMessage = null;
 			if (e instanceof Error && e.message) {
 				errorMessage = e.message;
@@ -428,7 +444,7 @@
 				External Comms Audio Injection Tool
 			</p>
 			<p class="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">
-				Injects an external audio recording into the demo as in-game voice chat.
+				Injects an external audio recording into the demo as in-game voice&nbsp;chat.
 			</p>
 		</header>
 
