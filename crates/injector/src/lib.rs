@@ -10,7 +10,15 @@ pub mod inject;
 pub mod steam_voice;
 pub mod steamid;
 
-pub use audio::{load_mono_pcm, Loudness};
-pub use inject::{inject_comms, InspectReport, InjectOptions, PlayerSlot};
+#[cfg(feature = "wasm")]
+pub mod wasm;
+
+pub use audio::{load_mono_pcm, load_mono_pcm_from_bytes, Loudness};
+pub use inject::{
+    inject_comms, inject_comms_bytes, inspect_demo, inspect_demo_bytes, InjectBytesOptions,
+    InjectBytesResult, InspectReport, InjectOptions, PlayerSlot,
+};
+#[cfg(feature = "extract")]
+pub use inject::{extract_voice_wav, ExtractStats};
 pub use steam_voice::{SteamVoiceEncoder, DEFAULT_BITRATE, DEFAULT_SAMPLE_RATE, FRAME_SAMPLES};
 pub use steamid::{parse_steam_id, steam_id_to_u64};

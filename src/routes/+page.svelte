@@ -251,33 +251,68 @@
 
 	async function onGenerate() {
 		if (!canGenerate || !demoFile || !mediaFile || !selectedPlayer || !gameStartValid) return;
+		if (mediaGameStart === null) return;
 
 		generating = true;
 		successMessage = null;
 		errorMessage = null;
-
-		await new Promise((r) => setTimeout(r, 1250));
+		stopPreview();
+		stopSourcePreview();
 
 		const outName = downloadName(demoFile.name);
-		const blob = new Blob(
-			[
-				`TF2 demo placeholder — ${outName}\n`,
-				`speaker=${selectedPlayer.name} (${selectedPlayer.steamId})\n`,
-				`mediaGameStart=${mediaGameStart}\n`,
-				`sources=${selectedSources.join(',')}\n`,
-				`(mock output; no real processing)\n`
-			],
-			{ type: 'application/octet-stream' }
-		);
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = outName;
-		a.click();
-		URL.revokeObjectURL(url);
+		const requestDemo = demoFile;
+		const requestMedia = mediaFile;
+		const requestPlayer = selectedPlayer;
+		const requestStart = mediaGameStart;
+		const requestSources = [...selectedSources];
+		const sourcesSnapshot = mediaInfo?.sources ?? [];
 
-		generating = false;
-		successMessage = `Downloaded ${outName}`;
+		try {
+			const [{ prepareInjectWav }, { injectCommsWasm }] = await Promise.all([
+				import('$lib/media/prepare-inject'),
+				import('$lib/wasm/injector')
+			]);
+
+			const audioWav = await prepareInjectWav(
+				requestMedia,
+				sourcesSnapshot,
+				requestSources,
+				(msg) => {
+					successMessage = msg;
+				}
+			);
+			successMessage = 'Injecting voice into demo…';
+
+			const demoBytes = new Uint8Array(await requestDemo.arrayBuffer());
+			const { demo, meta } = await injectCommsWasm({
+				demo: demoBytes,
+				audioWav,
+				audioSkipSecs: requestStart,
+				playerName: requestPlayer.name,
+				steamId: requestPlayer.steamId,
+				sampleRate: 24_000,
+				bitrate: 64_000
+			});
+
+			if (demoFile !== requestDemo || mediaFile !== requestMedia) return;
+
+			const blob = new Blob([demo.slice()], { type: 'application/octet-stream' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = outName;
+			a.click();
+			URL.revokeObjectURL(url);
+
+			successMessage = `Downloaded ${outName} (${meta.packets_injected} voice packets, offset ${meta.offset_secs.toFixed(2)}s via ${meta.offset_source})`;
+			errorMessage = null;
+		} catch (e) {
+			if (demoFile !== requestDemo || mediaFile !== requestMedia) return;
+			successMessage = null;
+			errorMessage = e instanceof Error ? e.message : 'Injection failed.';
+		} finally {
+			if (demoFile === requestDemo) generating = false;
+		}
 	}
 
 	function sourceLegend(info: MediaInspection): string {
@@ -537,9 +572,13 @@
 				transition:slide={{ duration: 160 }}
 			>
 				<li>
-					Generate currently mocks download only — no processing yet. Files stay in the browser.
+					Generate runs the Rust injector in your browser (WASM). Files never leave this device.
 				</li>
 				<li>Track inspect reads MP4 metadata in chunks (not the whole video).</li>
+				<li>
+					Demo timeline offset defaults to <code>teamplay_round_start</code>; game start skips
+					pre-GO audio in your recording.
+				</li>
 			</ul>
 		{/if}
 	</footer>

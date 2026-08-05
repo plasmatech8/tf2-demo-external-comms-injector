@@ -15,8 +15,10 @@ export default defineConfig({
 			adapter: adapter()
 		})
 	],
+	assetsInclude: ['**/*.wasm'],
 	optimizeDeps: {
-		include: ['@demostf/demo.js', 'mp4box', 'events', 'bit-buffer', 'snappyjs']
+		include: ['@demostf/demo.js', 'mp4box', 'events', 'bit-buffer', 'snappyjs'],
+		exclude: ['$lib/wasm/pkg/tf2_demo_comms_injector.js']
 	},
 	ssr: {
 		noExternal: ['@demostf/demo.js', 'mp4box']

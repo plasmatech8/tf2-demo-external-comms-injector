@@ -346,7 +346,7 @@ export async function extractMp4AudioTrackHeads(
 				const list = collected.get(t.id) ?? [];
 				if (list.length === 0) return false;
 				const last = list[list.length - 1];
-				return last.cts / last.timescale >= Math.min(maxSec, 8) - 0.05;
+				return last.cts / last.timescale >= maxSec - 0.05;
 			});
 			if (enough) break;
 		}
@@ -392,6 +392,30 @@ export async function extractMp4AudioTrackHeads(
 	}
 
 	return out;
+}
+
+/** Max duration pulled for a full-track inject extract (2 hours). */
+const FULL_EXTRACT_MAX_SEC = 2 * 60 * 60;
+
+/**
+ * Demux + decode an entire MP4 audio track (or up to {@link FULL_EXTRACT_MAX_SEC}).
+ * Used when preparing inject audio from Medal / multi-track recordings.
+ */
+export async function extractMp4AudioTrackFull(
+	file: File,
+	trackId: number,
+	signal?: AbortSignal
+): Promise<ExtractedAudio | null> {
+	const collected = await collectTrackSamples(file, trackId, FULL_EXTRACT_MAX_SEC, signal);
+	if (!collected) return null;
+	const decoded = await decodeCollectedTrack(collected, FULL_EXTRACT_MAX_SEC);
+	if (!decoded || decoded.samples.length < decoded.sampleRate * 0.1) return null;
+	return {
+		samples: decoded.samples,
+		sampleRate: decoded.sampleRate,
+		trackLabel: `track ${trackId}`,
+		trackId
+	};
 }
 
 type CollectedSample = {
@@ -578,7 +602,9 @@ async function collectTrackSamples(
 	const enoughSamples = () => {
 		if (samples.length === 0) return false;
 		const last = samples[samples.length - 1];
-		return last.cts / last.timescale >= Math.min(maxSec, 8) - 0.05;
+		// Preview callers pass maxSec ≈ 8; full inject passes a large maxSec and must
+		// read until that duration (or EOF via the append loops below).
+		return last.cts / last.timescale >= maxSec - 0.05;
 	};
 
 	// Pass 1: find moov. Medal/ffmpeg often put moov at the end — probe the tail first.

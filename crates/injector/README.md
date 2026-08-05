@@ -106,19 +106,38 @@ cargo test
 ./scripts/e2e_roundtrip.sh
 ```
 
+## WASM (browser)
+
+The library builds as `cdylib` for `wasm32-unknown-unknown` with pure-Rust Opus (`rusty-opus`):
+
+```bash
+# from repo root
+npm run build:wasm
+# or:
+./scripts/build-wasm.sh
+```
+
+Exports (see `src/wasm.rs`):
+
+- `inspect_demo(demo_bytes) → InspectReport JSON`
+- `inject_comms(demo_bytes, wav_bytes, WasmInjectOptions) → { demo, meta_json }`
+
+Native builds keep using libopus (`native-opus` feature). Browser builds use `--features wasm --no-default-features`.
+
 ## Limits / open questions
 
 - **In-game playback** still needs a human with TF2 to confirm audible output, spatialization, and UI “speaking” indicators.
 - SourceTV must have recorded with a `steam` voice init (this sample does). Older CELT/Speex demos need different codecs.
 - Very large injections near demo EOF can fail if no later packets exist to hang frames on — use an earlier `--offset`.
 - Alternate approaches (client mods, external A/V sync hooks) were intentionally avoided for security/complexity reasons; see `docs/research.md`.
+- Browser WASM loads the whole demo into memory (tens of MB is fine; multi-hundred-MB demos may stress tab memory). Cloudflare Worker hosting of the injector itself is a separate follow-up (request body / CPU limits).
 
 ## Layout
 
 ```
 crates/injector/
   Cargo.toml / Cargo.lock / rust-toolchain.toml
-  src/           library + CLIs
+  src/           library + CLIs + wasm bindings
   docs/          format notes + research
   scripts/       sample fetch + e2e
   samples/       small WAVs (large .dem downloaded by script)

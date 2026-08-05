@@ -1,6 +1,7 @@
 //! Audio loading and loudness adjustment.
 
 use hound::{SampleFormat, WavReader};
+use std::io::Cursor;
 use std::path::Path;
 use thiserror::Error;
 
@@ -49,6 +50,24 @@ impl Loudness {
 /// Load a WAV as mono PCM at `target_rate` (default 24 kHz), applying simple nearest/linear resample.
 pub fn load_mono_pcm(path: &Path, target_rate: u32, loudness: Loudness) -> Result<Vec<i16>, AudioError> {
     let mut reader = WavReader::open(path)?;
+    load_mono_pcm_from_reader(&mut reader, target_rate, loudness)
+}
+
+/// Load mono PCM from in-memory WAV bytes (browser / WASM path).
+pub fn load_mono_pcm_from_bytes(
+    wav: &[u8],
+    target_rate: u32,
+    loudness: Loudness,
+) -> Result<Vec<i16>, AudioError> {
+    let mut reader = WavReader::new(Cursor::new(wav))?;
+    load_mono_pcm_from_reader(&mut reader, target_rate, loudness)
+}
+
+fn load_mono_pcm_from_reader<R: std::io::Read>(
+    reader: &mut WavReader<R>,
+    target_rate: u32,
+    loudness: Loudness,
+) -> Result<Vec<i16>, AudioError> {
     let spec = reader.spec();
     if spec.sample_format != SampleFormat::Int {
         return Err(AudioError::UnsupportedFormat);
