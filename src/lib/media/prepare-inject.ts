@@ -51,6 +51,29 @@ export function encodeMonoWav(samples: Float32Array, sampleRate: number): Uint8A
 	return new Uint8Array(buffer);
 }
 
+/** Linear resample mono float PCM (same approach as the Rust injector). */
+export function resampleLinear(
+	input: Float32Array,
+	srcRate: number,
+	dstRate: number
+): Float32Array {
+	if (input.length === 0) return input;
+	if (srcRate === dstRate || srcRate <= 0 || dstRate <= 0) return input;
+	const outLen = Math.max(1, Math.round((input.length * dstRate) / srcRate));
+	const out = new Float32Array(outLen);
+	const scale = srcRate / dstRate;
+	for (let i = 0; i < outLen; i++) {
+		const srcPos = i * scale;
+		const i0 = Math.floor(srcPos);
+		const i1 = Math.min(i0 + 1, input.length - 1);
+		const frac = srcPos - i0;
+		const a = input[Math.min(i0, input.length - 1)] ?? 0;
+		const b = input[i1] ?? 0;
+		out[i] = a + (b - a) * frac;
+	}
+	return out;
+}
+
 function mixMono(buffers: Float32Array[]): Float32Array {
 	if (buffers.length === 0) return new Float32Array(0);
 	if (buffers.length === 1) return buffers[0]!;
@@ -132,25 +155,17 @@ export async function prepareInjectWav(
 
 	if (isMp4Family(file) && selected.every((s) => typeof s.trackId === 'number')) {
 		onProgress?.('Extracting audio tracks…');
-		const monos: Float32Array[] = [];
-		let sampleRate = 48000;
+		const tracks: { samples: Float32Array; sampleRate: number }[] = [];
 		for (const src of selected) {
 			onProgress?.(`Decoding ${src.label}…`);
 			const extracted = await extractMp4AudioTrackFull(file, src.trackId!);
 			if (!extracted) throw new Error(`Could not extract audio from ${src.label}.`);
-			monos.push(extracted.samples);
-			sampleRate = extracted.sampleRate;
+			tracks.push({ samples: extracted.samples, sampleRate: extracted.sampleRate });
 		}
-		// Resample mismatched rates by truncating/padding only if rates match;
-		// otherwise decode via a shared rate using OfflineAudioContext-style stretch is rare for Medal.
-		const rate = sampleRate;
-		const aligned = monos.map((m, i) => {
-			// If a later track reports a different rate, leave as-is (rare); lengths may differ.
-			void i;
-			return m;
-		});
+		const targetRate = Math.max(...tracks.map((t) => t.sampleRate));
 		onProgress?.('Mixing tracks…');
-		return encodeMonoWav(mixMono(aligned), rate);
+		const aligned = tracks.map((t) => resampleLinear(t.samples, t.sampleRate, targetRate));
+		return encodeMonoWav(mixMono(aligned), targetRate);
 	}
 
 	onProgress?.('Decoding media…');

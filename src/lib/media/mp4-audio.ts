@@ -615,6 +615,10 @@ async function collectTrackSamples(
 		return last.cts / last.timescale >= maxSec - 0.05;
 	};
 
+	// Bound chunk loops by file size (not a fixed ~1.5GB cap) so multi-GB Medal
+	// recordings can be fully demuxed for inject.
+	const maxChunks = Math.ceil(file.size / MP4_CHUNK_SIZE) + 16;
+
 	// Pass 1: find moov. Medal/ffmpeg often put moov at the end — probe the tail first.
 	const tailBytes = Math.min(file.size, 8 * MP4_CHUNK_SIZE);
 	if (tailBytes > 0) {
@@ -625,7 +629,7 @@ async function collectTrackSamples(
 		let offset = 0;
 		const stopBeforeTail = Math.max(0, file.size - tailBytes);
 		let guard = 0;
-		while (!mp4.moov && offset < stopBeforeTail && guard < 1536) {
+		while (!mp4.moov && offset < stopBeforeTail && guard < maxChunks) {
 			guard += 1;
 			offset = await appendRange(offset, Math.min(offset + MP4_CHUNK_SIZE, stopBeforeTail));
 		}
@@ -642,7 +646,7 @@ async function collectTrackSamples(
 	if (!enoughSamples()) {
 		let offset = 0;
 		let guard = 0;
-		while (offset < file.size && guard < 1536 && !enoughSamples()) {
+		while (offset < file.size && guard < maxChunks && !enoughSamples()) {
 			guard += 1;
 			const end = Math.min(offset + MP4_CHUNK_SIZE, file.size);
 			try {

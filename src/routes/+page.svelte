@@ -311,7 +311,8 @@
 			successMessage = null;
 			errorMessage = e instanceof Error ? e.message : 'Injection failed.';
 		} finally {
-			if (demoFile === requestDemo) generating = false;
+			// Always clear — even if the user swapped demo/media mid-run and we aborted.
+			generating = false;
 		}
 	}
 
