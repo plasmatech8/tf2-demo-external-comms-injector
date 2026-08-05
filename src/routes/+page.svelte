@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { fade, slide } from 'svelte/transition';
 	import FileField from '$lib/components/FileField.svelte';
 	import Hint from '$lib/components/Hint.svelte';
@@ -254,6 +254,12 @@
 		generateProgress = Math.min(100, Math.max(0, percent));
 	}
 
+	/** Let Svelte flush + the browser paint before a long sync stretch. */
+	async function paintProgress() {
+		await tick();
+		await new Promise<void>((r) => requestAnimationFrame(() => r()));
+	}
+
 	async function onGenerate() {
 		if (!canGenerate || !demoFile || !mediaFile || !selectedPlayer || !gameStartValid) return;
 		if (mediaGameStart === null) return;
@@ -275,11 +281,13 @@
 		const stillCurrent = () => demoFile === requestDemo && mediaFile === requestMedia;
 
 		try {
-			const [{ prepareInjectWav }, { injectCommsWasm }] = await Promise.all([
+			const [{ prepareInjectWav }, { injectCommsWasm, preloadInjectorWasm }] = await Promise.all([
 				import('$lib/media/prepare-inject'),
 				import('$lib/wasm/injector')
 			]);
 			if (!stillCurrent()) return;
+			// Warm WASM during audio prep so first inject isn’t “load wasm + encode”.
+			void preloadInjectorWasm();
 			setGenerateProgress('Preparing audio…', 5);
 
 			const audioWav = await prepareInjectWav(
@@ -295,10 +303,15 @@
 			if (!stillCurrent()) return;
 
 			setGenerateProgress('Reading demo…', 72);
+			// Yield so the progress label can paint before the next sync-ish work.
+			await paintProgress();
 			const demoBytes = new Uint8Array(await requestDemo.arrayBuffer());
 			if (!stillCurrent()) return;
 
 			setGenerateProgress('Injecting voice into demo…', 78);
+			// inject_comms is CPU-sync once WASM is loaded; without a paint yield the UI
+			// still shows “Reading demo…” for the whole inject (looks like variable read time).
+			await paintProgress();
 			const { demo, meta } = await injectCommsWasm({
 				demo: demoBytes,
 				audioWav,

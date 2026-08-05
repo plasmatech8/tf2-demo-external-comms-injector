@@ -65,6 +65,11 @@ async function ensureWasm(): Promise<void> {
 	await ready;
 }
 
+/** Start WASM download/compile early (e.g. during audio prep). */
+export function preloadInjectorWasm(): Promise<void> {
+	return ensureWasm();
+}
+
 export async function inspectDemoWasm(demo: Uint8Array): Promise<unknown> {
 	await ensureWasm();
 	return inspect_demo(demo);
@@ -81,6 +86,9 @@ export async function injectCommsWasm(req: InjectRequest): Promise<InjectOutput>
 	if (req.bitrate) opts.bitrate = req.bitrate;
 	if (req.loudnessDb !== undefined) opts.loudness_db = req.loudnessDb;
 	if (req.replaceExisting !== undefined) opts.replace_existing = req.replaceExisting;
+
+	// One more macrotask so any “Injecting…” UI update can paint before the sync encode.
+	await new Promise<void>((r) => setTimeout(r, 0));
 
 	let result: WasmInjectResult;
 	try {
