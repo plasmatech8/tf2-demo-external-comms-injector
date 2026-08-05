@@ -1,9 +1,32 @@
-# Build artifacts (crate-local target/; ignore root too if present)
+node_modules
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
+
+# Rust / injector crate
 /target/
 /crates/injector/target/
 **/*.rs.bk
 .idea/
-.vscode/
 .tools/
 
 # Large demo binaries (fetch via crates/injector/scripts/fetch_sample_demo.sh)

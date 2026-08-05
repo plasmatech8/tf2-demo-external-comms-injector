@@ -1,15 +1,27 @@
 # TF2 Demo External Comms Injector
 
-SvelteKit UI will live at the **repo root**. The Rust inject engine is a self-contained crate:
+Inject external audio into Team Fortress 2 `.dem` files as Steam voice chat. The **SvelteKit UI** lives at the repo root (Cloudflare Workers host); the **Rust engine** is a self-contained crate.
 
 | Path | Role |
 |------|------|
-| *(upcoming)* `/` | SvelteKit + Cloudflare Workers host / UI |
+| `/` | SvelteKit UI + Cloudflare Workers host |
 | [`crates/injector/`](crates/injector/) | Rust library + CLIs |
 
-## Rust engine
+## UI (repo root)
 
-Work inside the crate directory (no Cargo workspace at repo root):
+```sh
+npm install
+npm run dev
+```
+
+```sh
+npm run build
+npm run preview
+```
+
+Generate is still mocked in the UI — real injection lands in a follow-up. Engine details stay in the crate.
+
+## Rust engine
 
 ```bash
 cd crates/injector
