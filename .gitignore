@@ -46,6 +46,3 @@ crates/injector/samples/injected*.dem
 
 crates/injector/vendor/tf-demo-parser/.forgejo/
 crates/injector/vendor/tf-demo-parser/examples/
-
-# WASM build intermediates (committed pkg/ is the publishable artifact)
-crates/injector/target/
