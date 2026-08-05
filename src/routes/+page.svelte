@@ -5,6 +5,7 @@
 	import Hint from '$lib/components/Hint.svelte';
 	import LoadingStatus from '$lib/components/LoadingStatus.svelte';
 	import ProgressBar from '$lib/components/ProgressBar.svelte';
+	import SpeakerSelect from '$lib/components/SpeakerSelect.svelte';
 	import { listDemoPlayers, type DemoPlayer } from '$lib/demo/players';
 	import { previewAroundGameStart, type PreviewHandle } from '$lib/media/preview';
 	import { previewMediaSource, primeAudioContext } from '$lib/media/source-preview';
@@ -46,7 +47,6 @@
 	const selectedPlayer = $derived(
 		players.find((p) => String(p.userId) === selectedPlayerId) ?? null
 	);
-	const selectedTeamDot = $derived(teamDotStyle(selectedPlayer?.team));
 
 	const gameStartValid = $derived(
 		mediaGameStart !== null && Number.isFinite(mediaGameStart) && mediaGameStart >= 0
@@ -248,18 +248,6 @@
 		return `${base}_with_comms.dem`;
 	}
 
-	function playerLabel(player: DemoPlayer): string {
-		return player.name;
-	}
-
-	/** TF2 team color for speaker UI dots (`red` / `blue` from demostf). */
-	function teamDotStyle(team?: string): string | null {
-		const t = (team ?? '').trim().toLowerCase();
-		if (t === 'red') return 'background-color: var(--color-team-red)';
-		if (t === 'blue' || t === 'blu') return 'background-color: var(--color-team-blue)';
-		return null;
-	}
-
 	/** Map overall generate progress; status drives the bar label. */
 	function setGenerateProgress(status: string, percent: number) {
 		generateStatus = status;
@@ -429,30 +417,7 @@
 								{playersError}
 							</p>
 						{:else if players.length > 0}
-							<div class="relative">
-								{#if selectedTeamDot}
-									<span
-										class="pointer-events-none absolute top-1/2 left-3 z-10 size-2 -translate-y-1/2 rounded-full"
-										style={selectedTeamDot}
-										aria-hidden="true"
-									></span>
-								{/if}
-								<select
-									id="speaker"
-									bind:value={selectedPlayerId}
-									class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)]
-										focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]
-										{selectedTeamDot ? 'pl-8' : ''}"
-								>
-									{#each players as player (player.userId)}
-										<option value={String(player.userId)}>
-											{playerLabel(player)}{player.team
-												? ` · ${player.team}`
-												: ''} — {player.steamId}
-										</option>
-									{/each}
-								</select>
-							</div>
+							<SpeakerSelect id="speaker" players={players} bind:value={selectedPlayerId} />
 						{/if}
 					</div>
 				{/if}
