@@ -2,10 +2,10 @@
 
 Two clocks. Do not conflate them.
 
-| Concept | Meaning | CLI / API |
-|---------|---------|-----------|
+| Concept                       | Meaning                                                       | CLI / API                                      |
+| ----------------------------- | ------------------------------------------------------------- | ---------------------------------------------- |
 | **Game start in audio/video** | Seconds into the user’s recording until GO / end of countdown | `--audio-skip` (or trim the WAV before inject) |
-| **Inject start in the demo** | Demo timeline position where that trimmed audio should begin | `--offset` (demo seconds), or **auto** |
+| **Inject start in the demo**  | Demo timeline position where that trimmed audio should begin  | `--offset` (demo seconds), or **auto**         |
 
 ## Default demo align
 

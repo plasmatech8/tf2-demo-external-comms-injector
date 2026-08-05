@@ -53,21 +53,21 @@ ffmpeg -i input.mp4 -ar 24000 -ac 1 samples/comms.wav
 
 ### `inject-comms`
 
-| Flag | Description |
-|------|-------------|
-| `demo` | Input `.dem` |
-| `audio` | Input `.wav` (PCM) |
-| `-o, --output` | Output `.dem` |
-| `--audio-skip` | Seconds to skip from the start of the input audio (game start in the recording; default `0`) |
-| `--offset` | Demo-time inject start in seconds. **Default: auto** `teamplay_round_start`, else `0`. Not the same as `--audio-skip` — see [docs/timing.md](docs/timing.md) |
-| `--loudness-db` | Gain in dB (default `0`) |
-| `--gain` | Linear gain (overrides dB) |
-| `--player` | Player name substring |
-| `--steam-id` | SteamID64 / `STEAM_X:Y:Z` / `[U:1:n]` |
-| `--client-index` | Explicit 0-based slot |
-| `--sample-rate` | Encode rate (default `24000`; use 24 kHz for TF2 playback) |
-| `--bitrate` | Opus bitrate bits/sec (default `64000`) |
-| `--replace-existing` | Drop that client's voice in the injection window |
+| Flag                 | Description                                                                                                                                                  |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `demo`               | Input `.dem`                                                                                                                                                 |
+| `audio`              | Input `.wav` (PCM)                                                                                                                                           |
+| `-o, --output`       | Output `.dem`                                                                                                                                                |
+| `--audio-skip`       | Seconds to skip from the start of the input audio (game start in the recording; default `0`)                                                                 |
+| `--offset`           | Demo-time inject start in seconds. **Default: auto** `teamplay_round_start`, else `0`. Not the same as `--audio-skip` — see [docs/timing.md](docs/timing.md) |
+| `--loudness-db`      | Gain in dB (default `0`)                                                                                                                                     |
+| `--gain`             | Linear gain (overrides dB)                                                                                                                                   |
+| `--player`           | Player name substring                                                                                                                                        |
+| `--steam-id`         | SteamID64 / `STEAM_X:Y:Z` / `[U:1:n]`                                                                                                                        |
+| `--client-index`     | Explicit 0-based slot                                                                                                                                        |
+| `--sample-rate`      | Encode rate (default `24000`; use 24 kHz for TF2 playback)                                                                                                   |
+| `--bitrate`          | Opus bitrate bits/sec (default `64000`)                                                                                                                      |
+| `--replace-existing` | Drop that client's voice in the injection window                                                                                                             |
 
 ### `inspect-demo` / `extract-voice`
 
@@ -91,13 +91,13 @@ Voice is attributed to an existing player slot (client index + steamid) so the d
 
 Against demos.tf `#1479677` + a 2s 440 Hz tone attributed to `plasmatech8`:
 
-| Check | Result |
-|-------|--------|
-| Original voice packets | 0 |
-| Injected packets | 100 |
+| Check                       | Result                    |
+| --------------------------- | ------------------------- |
+| Original voice packets      | 0                         |
+| Injected packets            | 100                       |
 | Extracted packets / steamid | 100 / `76561198081400087` |
-| Extracted duration | 2.00 s @ 24 kHz |
-| Dominant frequency | ~440 Hz (matches source) |
+| Extracted duration          | 2.00 s @ 24 kHz           |
+| Dominant frequency          | ~440 Hz (matches source)  |
 
 Run the automated suite from this crate directory:
 

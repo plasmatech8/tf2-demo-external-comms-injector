@@ -315,7 +315,9 @@ export async function extractMp4AudioTrackHeads(
 					const data =
 						raw instanceof Uint8Array
 							? raw.slice()
-							: new Uint8Array(raw instanceof ArrayBuffer ? raw : Uint8Array.from(raw as ArrayLike<number>));
+							: new Uint8Array(
+									raw instanceof ArrayBuffer ? raw : Uint8Array.from(raw as ArrayLike<number>)
+								);
 					list.push({ ...sample, data });
 				}
 			};
@@ -495,7 +497,12 @@ async function decodeCollectedTrack(
 	}));
 
 	const codec = meta.codec.toLowerCase();
-	if (meta.type === 'mp4a' || codec.includes('mp4a') || codec.includes('aac') || codec.includes('40.')) {
+	if (
+		meta.type === 'mp4a' ||
+		codec.includes('mp4a') ||
+		codec.includes('aac') ||
+		codec.includes('40.')
+	) {
 		const asc = findAscInDescriptionBoxes(meta.descriptionBoxes);
 		const adts = samplesToAdts(asSamples, asc, meta.sampleRate, meta.channelCount, maxSec);
 		const decoded = await decodeAdts(adts, maxSec);
@@ -563,7 +570,8 @@ async function collectTrackSamples(
 			meta = {
 				type: entry?.type || (String(track.codec).toLowerCase().includes('opus') ? 'Opus' : 'mp4a'),
 				codec: track.codec ?? '',
-				timescale: (track as { timescale?: number }).timescale || trak?.mdia?.mdhd?.timescale || 48000,
+				timescale:
+					(track as { timescale?: number }).timescale || trak?.mdia?.mdhd?.timescale || 48000,
 				channelCount: track.audio?.channel_count || entry?.channel_count || 2,
 				sampleSize: entry?.samplesize || 16,
 				sampleRate,

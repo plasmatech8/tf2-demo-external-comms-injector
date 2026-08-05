@@ -2,11 +2,11 @@
 
 Inject external audio into Team Fortress 2 `.dem` files as Steam voice chat. The **SvelteKit UI** lives at the repo root (Cloudflare Workers host); the **Rust engine** is a self-contained crate compiled to **WASM** for in-browser injection.
 
-| Path | Role |
-|------|------|
-| `/` | SvelteKit UI + Cloudflare Workers host |
-| [`crates/injector/`](crates/injector/) | Rust library + CLIs (+ WASM target) |
-| [`src/lib/wasm/`](src/lib/wasm/) | Prebuilt WASM package used by the UI |
+| Path                                   | Role                                   |
+| -------------------------------------- | -------------------------------------- |
+| `/`                                    | SvelteKit UI + Cloudflare Workers host |
+| [`crates/injector/`](crates/injector/) | Rust library + CLIs (+ WASM target)    |
+| [`src/lib/wasm/`](src/lib/wasm/)       | Prebuilt WASM package used by the UI   |
 
 ## UI (repo root)
 

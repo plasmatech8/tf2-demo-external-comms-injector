@@ -65,8 +65,7 @@ export async function injectCommsWasm(req: InjectRequest): Promise<InjectOutput>
 	await ensureWasm();
 	const opts = new WasmInjectOptions();
 	opts.audio_skip_secs = req.audioSkipSecs;
-	opts.offset_secs =
-		req.offsetSecs === undefined || req.offsetSecs === null ? -1 : req.offsetSecs;
+	opts.offset_secs = req.offsetSecs === undefined || req.offsetSecs === null ? -1 : req.offsetSecs;
 	opts.player_name = req.playerName ?? undefined;
 	opts.steam_id = req.steamId ?? undefined;
 	if (req.sampleRate) opts.sample_rate = req.sampleRate;
