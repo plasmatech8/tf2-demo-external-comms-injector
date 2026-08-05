@@ -10,7 +10,7 @@
 	<title>TF2 Demo File — External Comms Audio Injection Tool</title>
 	<meta
 		name="description"
-		content="Inject external Discord/mic audio into a Team Fortress 2 demo as in-game voice chat. Plays back in TF2 like real VC."
+		content="Inject an external audio recording into a Team Fortress 2 demo as in-game voice chat."
 	/>
 	<link rel="preconnect" href="https://fonts.googleapis.com" />
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
