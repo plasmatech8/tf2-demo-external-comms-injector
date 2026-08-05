@@ -389,8 +389,7 @@
 				External Comms Audio Injection Tool
 			</p>
 			<p class="mt-3 max-w-md text-sm leading-relaxed text-[var(--color-muted)]">
-				Injects your Discord / mic recording into the demo as in-game voice chat, so it plays back
-				in TF2 like real VC.
+				Injects an external audio recording into the demo as in-game voice chat.
 			</p>
 		</header>
 
