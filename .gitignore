@@ -21,3 +21,28 @@ Thumbs.db
 # Vite
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Rust / injector crate
+/target/
+/crates/injector/target/
+**/*.rs.bk
+.idea/
+.tools/
+
+# Large demo binaries (fetch via crates/injector/scripts/fetch_sample_demo.sh)
+crates/injector/samples/*.dem
+crates/injector/samples/e2e_*.json
+crates/injector/samples/e2e_*.wav
+crates/injector/samples/extracted_*.wav
+crates/injector/samples/injected*.dem
+
+# Local research clones
+/research/
+/tmp/
+
+# Manual-test demos / audio / video (keep README tracked)
+/crates/injector/scratch/**
+!/crates/injector/scratch/README.md
+
+crates/injector/vendor/tf-demo-parser/.forgejo/
+crates/injector/vendor/tf-demo-parser/examples/

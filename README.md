@@ -1,42 +1,37 @@
-# sv
+# TF2 Demo External Comms Injector
 
-Everything you need to build a Svelte project, powered by [`sv`](https://github.com/sveltejs/cli).
+Inject external audio into Team Fortress 2 `.dem` files as Steam voice chat. The **SvelteKit UI** lives at the repo root (Cloudflare Workers host); the **Rust engine** is a self-contained crate.
 
-## Creating a project
+| Path | Role |
+|------|------|
+| `/` | SvelteKit UI + Cloudflare Workers host |
+| [`crates/injector/`](crates/injector/) | Rust library + CLIs |
 
-If you're seeing this, you've probably already done this step. Congrats!
-
-```sh
-# create a new project
-npx sv create my-app
-```
-
-To recreate this project with the same configuration:
+## UI (repo root)
 
 ```sh
-# recreate this project
-npx sv@0.16.6 create --template minimal --types ts --add prettier eslint tailwindcss="plugins:typography,forms" sveltekit-adapter="adapter:cloudflare+cfTarget:workers" --install npm .
-```
-
-## Developing
-
-Once you've created a project and installed dependencies with `npm install` (or `pnpm install` or `yarn`), start a development server:
-
-```sh
+npm install
 npm run dev
-
-# or start the server and open the app in a new browser tab
-npm run dev -- --open
 ```
-
-## Building
-
-To create a production version of your app:
 
 ```sh
 npm run build
+npm run preview
 ```
 
-You can preview the production build with `npm run preview`.
+Generate is still mocked in the UI — real injection lands in a follow-up. Engine details stay in the crate.
 
-> To deploy your app, you may need to install an [adapter](https://svelte.dev/docs/kit/adapters) for your target environment.
+## Rust engine
+
+```bash
+cd crates/injector
+cargo build --release
+./scripts/fetch_sample_demo.sh
+./target/release/inject-comms --help
+```
+
+Full usage, verification, and format notes: **[crates/injector/README.md](crates/injector/README.md)**.
+
+## License
+
+MIT. Vendored `tf-demo-parser` retains its upstream MIT/Apache-2.0 license.
