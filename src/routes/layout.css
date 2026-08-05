@@ -19,6 +19,8 @@
 	--color-accent-hover: #d46a34;
 	--color-accent-muted: #8a3f1c;
 	--color-success: #6a9a6a;
+	--color-team-red: #c43c3c;
+	--color-team-blue: #4a7ab5;
 }
 
 @layer base {
