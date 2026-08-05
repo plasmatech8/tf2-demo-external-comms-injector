@@ -3,7 +3,7 @@
  */
 
 import { extractMp4AudioTrackFull } from '$lib/media/mp4-audio';
-import type { MediaSource } from '$lib/media/tracks';
+import { DECODE_SIZE_LIMIT, type MediaSource } from '$lib/media/tracks';
 
 function AudioCtor(): typeof AudioContext | undefined {
 	if (typeof AudioContext !== 'undefined') return AudioContext;
@@ -142,6 +142,109 @@ function isWav(file: File): boolean {
 }
 
 /**
+ * Read integer PCM WAV channels without WebAudio (keeps large WAVs off decodeAudioData).
+ */
+async function loadWavChannels(
+	file: File,
+	channelIndexes: number[]
+): Promise<{ samples: Float32Array; sampleRate: number }> {
+	const buf = await file.arrayBuffer();
+	const view = new DataView(buf);
+	if (buf.byteLength < 44) throw new Error('WAV file is too short.');
+	const riff = String.fromCharCode(
+		view.getUint8(0),
+		view.getUint8(1),
+		view.getUint8(2),
+		view.getUint8(3)
+	);
+	const wave = String.fromCharCode(
+		view.getUint8(8),
+		view.getUint8(9),
+		view.getUint8(10),
+		view.getUint8(11)
+	);
+	if (riff !== 'RIFF' || wave !== 'WAVE') throw new Error('Not a RIFF/WAVE file.');
+
+	let offset = 12;
+	let channels = 0;
+	let sampleRate = 0;
+	let bitsPerSample = 0;
+	let dataOffset = -1;
+	let dataSize = 0;
+
+	while (offset + 8 <= view.byteLength) {
+		const id = String.fromCharCode(
+			view.getUint8(offset),
+			view.getUint8(offset + 1),
+			view.getUint8(offset + 2),
+			view.getUint8(offset + 3)
+		);
+		const size = view.getUint32(offset + 4, true);
+		const body = offset + 8;
+		if (id === 'fmt ') {
+			const format = view.getUint16(body, true);
+			if (format !== 1) throw new Error('Only PCM WAV is supported for large files.');
+			channels = view.getUint16(body + 2, true);
+			sampleRate = view.getUint32(body + 4, true);
+			bitsPerSample = view.getUint16(body + 14, true);
+		} else if (id === 'data') {
+			dataOffset = body;
+			dataSize = size;
+			break;
+		}
+		offset = body + size + (size % 2);
+	}
+
+	if (!channels || !sampleRate || dataOffset < 0) {
+		throw new Error('Could not parse WAV header.');
+	}
+	if (![8, 16, 24, 32].includes(bitsPerSample)) {
+		throw new Error(`Unsupported WAV bit depth (${bitsPerSample}).`);
+	}
+
+	const bytesPerSample = bitsPerSample / 8;
+	const frameBytes = bytesPerSample * channels;
+	const frames = Math.floor(dataSize / frameBytes);
+	const pick =
+		channelIndexes.length > 0
+			? channelIndexes.map((i) => Math.min(Math.max(0, i), channels - 1))
+			: Array.from({ length: channels }, (_, i) => i);
+
+	const out = new Float32Array(frames);
+	const scale = 1 / pick.length;
+	for (let f = 0; f < frames; f++) {
+		let sum = 0;
+		for (const ch of pick) {
+			const o = dataOffset + f * frameBytes + ch * bytesPerSample;
+			let s = 0;
+			if (bitsPerSample === 8) {
+				s = (view.getUint8(o) - 128) / 128;
+			} else if (bitsPerSample === 16) {
+				s = view.getInt16(o, true) / 32768;
+			} else if (bitsPerSample === 24) {
+				const b0 = view.getUint8(o);
+				const b1 = view.getUint8(o + 1);
+				const b2 = view.getUint8(o + 2);
+				let v = (b2 << 16) | (b1 << 8) | b0;
+				if (v & 0x800000) v |= ~0xffffff;
+				s = v / 8388608;
+			} else {
+				s = view.getInt32(o, true) / 2147483648;
+			}
+			sum += s;
+		}
+		out[f] = sum * scale;
+	}
+
+	return { samples: out, sampleRate };
+}
+
+function tooLargeMessage(file: File): string {
+	const mb = (file.size / (1024 * 1024)).toFixed(0);
+	return `This file is too large to fully decode in the browser (${mb} MB). Use a multi-track MP4 (Medal) or convert/trim to WAV first.`;
+}
+
+/**
  * Decode selected tracks/channels into a mono PCM WAV suitable for the Rust injector.
  */
 export async function prepareInjectWav(
@@ -168,10 +271,25 @@ export async function prepareInjectWav(
 		return encodeMonoWav(mixMono(aligned), targetRate);
 	}
 
+	// WAV: read PCM directly (no decodeAudioData), including larger files.
+	if (isWav(file)) {
+		onProgress?.('Reading WAV…');
+		const indexes = selected
+			.map((s) => s.channelIndex)
+			.filter((n): n is number => typeof n === 'number');
+		const { samples, sampleRate } = await loadWavChannels(file, indexes);
+		return encodeMonoWav(samples, sampleRate);
+	}
+
+	// Remaining formats need WebAudio full-file decode — same size guard as inspect.
+	if (file.size > DECODE_SIZE_LIMIT) {
+		throw new Error(tooLargeMessage(file));
+	}
+
 	onProgress?.('Decoding media…');
 	const audio = await decodeWholeFile(file);
 
-	if (isWav(file) || selected.some((s) => typeof s.channelIndex === 'number')) {
+	if (selected.some((s) => typeof s.channelIndex === 'number')) {
 		const indexes = selected
 			.map((s) => s.channelIndex)
 			.filter((n): n is number => typeof n === 'number');

@@ -51,7 +51,15 @@ let ready: Promise<void> | null = null;
 
 async function ensureWasm(): Promise<void> {
 	if (!ready) {
-		ready = init({ module_or_path: wasmUrl }).then(() => undefined);
+		ready = (async () => {
+			try {
+				await init({ module_or_path: wasmUrl });
+			} catch (err) {
+				// Allow a later call to retry after a failed first load.
+				ready = null;
+				throw err;
+			}
+		})();
 	}
 	await ready;
 }

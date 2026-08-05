@@ -20,7 +20,7 @@ export type MediaInspection = {
 };
 
 /** Skip full decode for large non-MP4/WAV files — listing tracks does not need PCM. */
-const DECODE_SIZE_LIMIT = 32 * 1024 * 1024;
+export const DECODE_SIZE_LIMIT = 32 * 1024 * 1024;
 const MP4_CHUNK_SIZE = 1024 * 1024;
 
 function looksLikeComms(name: string): boolean {
