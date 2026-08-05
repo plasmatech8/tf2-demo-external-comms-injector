@@ -31,4 +31,4 @@ inject-comms match.dem comms.wav -o out.dem --player Name --audio-skip 3
 ## Also
 
 - Encode at **24 kHz** for in-game playback; 48 kHz often shows speaking indicators with little/no audio.
-- See `scratch/README.md` for a known-good local recipe.
+- See [`scratch/README.md`](../../../scratch/README.md) (repo root) for a known-good local recipe.

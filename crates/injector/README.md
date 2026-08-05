@@ -123,8 +123,9 @@ crates/injector/
   scripts/       sample fetch + e2e
   samples/       small WAVs (large .dem downloaded by script)
   vendor/        tf-demo-parser snapshot (write feature not on crates.io 0.6.4)
-  scratch/       local manual-test files (gitignored except README)
 ```
+
+Local manual-test demos/audio/video live in repo-root [`scratch/`](../../scratch/) (gitignored except `README.md`).
 
 ## License
 
