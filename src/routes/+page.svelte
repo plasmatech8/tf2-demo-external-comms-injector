@@ -15,6 +15,8 @@
 	let mediaFile = $state<File | null>(null);
 	/** Seconds into the media until game start / GO. Defaults to 5. */
 	let mediaGameStart = $state<number | null>(5);
+	/** String draft for the game-start field so typing isn't rewritten by toFixed. */
+	let gameStartDraft = $state('5.0');
 	let selectedPlayerId = $state('');
 	let selectedSources = $state<string[]>([]);
 	let generating = $state(false);
@@ -133,9 +135,45 @@
 		}
 	}
 
+	const GAME_START_DRAFT_RE = /^\d*\.?\d*$/;
+
+	/** Keep digits and at most one decimal point; don't otherwise fight the user. */
+	function sanitizeGameStartDraft(raw: string): string {
+		const cleaned = raw.replace(/[^\d.]/g, '');
+		const dot = cleaned.indexOf('.');
+		if (dot === -1) return cleaned;
+		return cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, '');
+	}
+
+	function syncMediaGameStartFromDraft(draft: string) {
+		if (draft === '' || draft === '.' || !GAME_START_DRAFT_RE.test(draft)) {
+			mediaGameStart = null;
+			return;
+		}
+		const v = Number(draft);
+		mediaGameStart = Number.isFinite(v) && v >= 0 ? v : null;
+	}
+
 	function onGameStartInput(e: Event) {
-		const v = (e.currentTarget as HTMLInputElement).valueAsNumber;
-		mediaGameStart = Number.isFinite(v) ? Math.round(v * 10) / 10 : null;
+		const draft = sanitizeGameStartDraft((e.currentTarget as HTMLInputElement).value);
+		gameStartDraft = draft;
+		syncMediaGameStartFromDraft(draft);
+	}
+
+	function onGameStartBlur() {
+		const draft = gameStartDraft.trim();
+		if (draft === '' || draft === '.' || !GAME_START_DRAFT_RE.test(draft)) {
+			mediaGameStart = null;
+			return;
+		}
+		const v = Number(draft);
+		if (!Number.isFinite(v) || v < 0) {
+			mediaGameStart = null;
+			return;
+		}
+		const rounded = Math.round(v * 10) / 10;
+		mediaGameStart = rounded;
+		gameStartDraft = rounded.toFixed(1);
 	}
 
 	async function onPreview() {
@@ -210,6 +248,7 @@
 		selectedSources = [];
 		mediaError = null;
 		mediaGameStart = file ? 5 : null;
+		gameStartDraft = file ? '5.0' : '';
 		successMessage = null;
 		errorMessage = null;
 
@@ -465,15 +504,14 @@
 							</div>
 							<input
 								id="media-game-start"
-								type="number"
-								min="0"
-								step="0.1"
+								type="text"
 								required
 								placeholder="e.g. 5.0"
 								autocomplete="off"
 								inputmode="decimal"
-								value={mediaGameStart === null ? '' : mediaGameStart.toFixed(1)}
+								value={gameStartDraft}
 								oninput={onGameStartInput}
+								onblur={onGameStartBlur}
 								aria-invalid={showGameStartNeeded}
 								class="w-full rounded border bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)] placeholder:text-[var(--color-muted)]
 									focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]
