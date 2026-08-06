@@ -77,12 +77,20 @@ type Sample = {
 	is_sync: boolean;
 };
 
-function looksLikeGame(name: string): boolean {
-	return /\bgame\b/i.test(name) && !/discord|mic|microphone|all\s*audio/i.test(name);
-}
-
 function looksLikeComms(name: string): boolean {
 	return /discord|mic|microphone|voice|comms|chat|vc/i.test(name);
+}
+
+/** Game / desktop / mix — deprioritize for preview ranking. */
+function looksLikeGame(name: string): boolean {
+	if (looksLikeComms(name) || /all\s*audio|master|mix|full/i.test(name)) return false;
+	return (
+		/\bgame\b/i.test(name) ||
+		/\bdesktop(\s*audio)?\b/i.test(name) ||
+		/\bgame\s*capture\b/i.test(name) ||
+		/\bspeakers?\b/i.test(name) ||
+		/\boutputs?\b/i.test(name)
+	);
 }
 
 function isGenericHandlerName(name: string): boolean {

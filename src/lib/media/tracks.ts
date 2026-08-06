@@ -17,6 +17,8 @@ export type MediaInspection = {
 	kind: MediaSourceKind;
 	sources: MediaSource[];
 	summary: string;
+	/** Shown when nothing was auto-checked (e.g. untitled OBS multi-track). */
+	selectionHint?: string;
 };
 
 /** Skip full decode for large non-MP4/WAV files — listing tracks does not need PCM. */
@@ -31,19 +33,37 @@ function looksLikeFullMix(name: string): boolean {
 	return /all\s*audio|master|mix|full|everything/i.test(name);
 }
 
-function looksLikeGame(name: string): boolean {
-	return /\bgame\b/i.test(name) && !looksLikeComms(name) && !looksLikeFullMix(name);
+/** Medal "game" plus OBS-ish desktop/output captures — not voice chat. */
+function looksLikeGameOrDesktop(name: string): boolean {
+	if (looksLikeComms(name) || looksLikeFullMix(name)) return false;
+	return (
+		/\bgame\b/i.test(name) ||
+		/\bdesktop(\s*audio)?\b/i.test(name) ||
+		/\bgame\s*capture\b/i.test(name) ||
+		/\bspeakers?\b/i.test(name) ||
+		/\boutputs?\b/i.test(name)
+	);
+}
+
+function looksLikeSkip(name: string): boolean {
+	return looksLikeFullMix(name) || looksLikeGameOrDesktop(name);
 }
 
 function isGenericHandlerName(name: string): boolean {
 	return !name || /^sound\s*handler$/i.test(name) || /^audio$/i.test(name);
 }
 
-/** Prefer comms tracks; skip game audio and full mixes when multiple tracks exist. */
+/** Empty / SoundHandler / "Track 2" — no useful recorder label. */
+function isGenericTrackName(name: string): boolean {
+	const n = name.trim();
+	return !n || isGenericHandlerName(n) || /^track\s*\d+$/i.test(n);
+}
+
+/** Prefer comms tracks; skip game/desktop and full mixes when multiple tracks exist. */
 function defaultTrackSelection(name: string, total: number): boolean {
 	if (total === 1) return true;
 	if (looksLikeComms(name)) return true;
-	if (looksLikeFullMix(name) || looksLikeGame(name)) return false;
+	if (looksLikeSkip(name)) return false;
 	return true;
 }
 
@@ -184,15 +204,26 @@ function sourcesFromMp4Tracks(audioTracks: Mp4AudioTrack[]): MediaSource[] {
 
 	const hasComms = sources.some((s) => looksLikeComms(s.label));
 	if (hasComms) {
-		// Only inject voice/comms by default — leave game and mixes unchecked.
+		// Only inject voice/comms by default — leave game/desktop and mixes unchecked.
 		for (const s of sources) {
 			s.defaultSelected = looksLikeComms(s.label);
 		}
 	} else {
-		const hasMix = sources.some((s) => looksLikeFullMix(s.label));
-		if (hasMix) {
-			for (const s of sources) {
-				s.defaultSelected = !looksLikeFullMix(s.label);
+		const nameFor = (s: MediaSource) => {
+			// Label is "Name — 2ch · 48 kHz" or "Track 1 — …"; use the title segment.
+			return s.label.split('—')[0]?.trim() ?? s.label;
+		};
+		const allGeneric =
+			sources.length > 1 && sources.every((s) => isGenericTrackName(nameFor(s)));
+		if (allGeneric) {
+			// Untitled OBS multi-track: don't guess — force an explicit pick.
+			for (const s of sources) s.defaultSelected = false;
+		} else {
+			const hasSkip = sources.some((s) => looksLikeSkip(nameFor(s)));
+			if (hasSkip) {
+				for (const s of sources) {
+					s.defaultSelected = !looksLikeSkip(nameFor(s));
+				}
 			}
 		}
 	}
@@ -301,10 +332,14 @@ async function inspectMp4(file: File): Promise<MediaInspection | null> {
 	}
 
 	const sources = sourcesFromMp4Tracks(audioTracks);
+	const noneSelected = sources.length > 0 && sources.every((s) => !s.defaultSelected);
 	return {
 		kind: 'tracks',
 		sources,
-		summary: `${sources.length} audio track${sources.length === 1 ? '' : 's'} detected.`
+		summary: `${sources.length} audio track${sources.length === 1 ? '' : 's'} detected.`,
+		selectionHint: noneSelected
+			? 'No voice-looking tracks found — pick which to inject.'
+			: undefined
 	};
 }
 

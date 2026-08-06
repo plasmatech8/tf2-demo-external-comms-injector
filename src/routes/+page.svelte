@@ -612,6 +612,9 @@
 										</div>
 									{/each}
 								</div>
+								{#if mediaInfo.selectionHint && selectedSources.length === 0}
+									<p class="text-xs text-[var(--color-muted)]">{mediaInfo.selectionHint}</p>
+								{/if}
 							{/if}
 						</div>
 					</div>
