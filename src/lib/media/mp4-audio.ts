@@ -5,12 +5,53 @@
 
 const MP4_CHUNK_SIZE = 1024 * 1024;
 
+/** Non-finite `maxSec` means demux/decode until EOF (full inject extract). */
+function pastDurationCap(
+	cts: number,
+	timescale: number,
+	maxSec: number,
+	slackSec: number
+): boolean {
+	if (!Number.isFinite(maxSec)) return false;
+	return cts / timescale > maxSec + slackSec;
+}
+
+function reachedDurationCap(
+	cts: number,
+	timescale: number,
+	maxSec: number,
+	slackSec: number
+): boolean {
+	if (!Number.isFinite(maxSec)) return false;
+	return cts / timescale >= maxSec - slackSec;
+}
+
 export type ExtractedAudio = {
 	samples: Float32Array;
 	sampleRate: number;
 	trackLabel: string;
 	trackId: number;
 };
+
+/** Progress within one full-track extract (0–1). */
+export type ExtractProgressFn = (ratio: number) => void;
+
+/** Yield to the browser event loop so long demux/decode doesn't freeze the UI. */
+function yieldToMain(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** Throttle progress emits (≥1% advance or forced). */
+function makeProgressReporter(onProgress?: ExtractProgressFn): (ratio: number, force?: boolean) => void {
+	let last = -1;
+	return (ratio: number, force = false) => {
+		if (!onProgress) return;
+		const clamped = Math.max(0, Math.min(1, ratio));
+		if (!force && clamped - last < 0.01 && clamped < 1) return;
+		last = clamped;
+		onProgress(clamped);
+	};
+}
 
 type Mp4AudioTrackInfo = {
 	id: number;
@@ -36,12 +77,20 @@ type Sample = {
 	is_sync: boolean;
 };
 
-function looksLikeGame(name: string): boolean {
-	return /\bgame\b/i.test(name) && !/discord|mic|microphone|all\s*audio/i.test(name);
-}
-
 function looksLikeComms(name: string): boolean {
 	return /discord|mic|microphone|voice|comms|chat|vc/i.test(name);
+}
+
+/** Game / desktop / mix — deprioritize for preview ranking. */
+function looksLikeGame(name: string): boolean {
+	if (looksLikeComms(name) || /all\s*audio|master|mix|full/i.test(name)) return false;
+	return (
+		/\bgame\b/i.test(name) ||
+		/\bdesktop(\s*audio)?\b/i.test(name) ||
+		/\bgame\s*capture\b/i.test(name) ||
+		/\bspeakers?\b/i.test(name) ||
+		/\boutputs?\b/i.test(name)
+	);
 }
 
 function isGenericHandlerName(name: string): boolean {
@@ -176,7 +225,7 @@ function samplesToAdts(
 	let total = 0;
 
 	for (const sample of samples) {
-		if (sample.cts / sample.timescale > maxSec + 0.5) break;
+		if (pastDurationCap(sample.cts, sample.timescale, maxSec, 0.5)) break;
 		const payload = sample.data instanceof Uint8Array ? sample.data : new Uint8Array(sample.data);
 		const frameLen = 7 + payload.length;
 		const header = new Uint8Array(7);
@@ -214,7 +263,8 @@ declare global {
 
 function mixToMono(buffer: AudioBuffer, maxSec: number): Float32Array {
 	const rate = buffer.sampleRate;
-	const frames = Math.min(buffer.length, Math.floor(rate * maxSec));
+	const capped = Number.isFinite(maxSec) ? Math.floor(rate * maxSec) : buffer.length;
+	const frames = Math.min(buffer.length, capped);
 	const mono = new Float32Array(frames);
 	const ch = buffer.numberOfChannels;
 	for (let c = 0; c < ch; c++) {
@@ -309,13 +359,15 @@ export async function extractMp4AudioTrackHeads(
 				const list = collected.get(id);
 				if (!list) return;
 				for (const sample of samples) {
-					if (sample.cts / sample.timescale > maxSec + 0.75) continue;
+					if (pastDurationCap(sample.cts, sample.timescale, maxSec, 0.75)) continue;
 					// Copy payload — mp4box reuses underlying buffers across batches.
 					const raw = sample.data;
 					const data =
 						raw instanceof Uint8Array
 							? raw.slice()
-							: new Uint8Array(raw instanceof ArrayBuffer ? raw : Uint8Array.from(raw as ArrayLike<number>));
+							: new Uint8Array(
+									raw instanceof ArrayBuffer ? raw : Uint8Array.from(raw as ArrayLike<number>)
+								);
 					list.push({ ...sample, data });
 				}
 			};
@@ -346,7 +398,7 @@ export async function extractMp4AudioTrackHeads(
 				const list = collected.get(t.id) ?? [];
 				if (list.length === 0) return false;
 				const last = list[list.length - 1];
-				return last.cts / last.timescale >= Math.min(maxSec, 8) - 0.05;
+				return reachedDurationCap(last.cts, last.timescale, maxSec, 0.05);
 			});
 			if (enough) break;
 		}
@@ -392,6 +444,39 @@ export async function extractMp4AudioTrackHeads(
 	}
 
 	return out;
+}
+
+/** Demux + decode an entire MP4 audio track until EOF (no silent duration cap). */
+export async function extractMp4AudioTrackFull(
+	file: File,
+	trackId: number,
+	signal?: AbortSignal,
+	onProgress?: ExtractProgressFn
+): Promise<ExtractedAudio | null> {
+	const report = makeProgressReporter(onProgress);
+	report(0, true);
+	const collected = await collectTrackSamples(
+		file,
+		trackId,
+		Number.POSITIVE_INFINITY,
+		signal,
+		report
+	);
+	if (!collected) return null;
+	report(0.8, true);
+	const decoded = await decodeCollectedTrack(
+		collected,
+		Number.POSITIVE_INFINITY,
+		report
+	);
+	if (!decoded || decoded.samples.length < decoded.sampleRate * 0.1) return null;
+	report(1, true);
+	return {
+		samples: decoded.samples,
+		sampleRate: decoded.sampleRate,
+		trackLabel: `track ${trackId}`,
+		trackId
+	};
 }
 
 type CollectedSample = {
@@ -456,7 +541,8 @@ function findAscInDescriptionBoxes(boxes: unknown[]): Uint8Array | undefined {
 
 async function decodeCollectedTrack(
 	collected: { meta: TrackRemuxMeta; samples: CollectedSample[] },
-	maxSec: number
+	maxSec: number,
+	report?: (ratio: number, force?: boolean) => void
 ): Promise<{ samples: Float32Array; sampleRate: number } | null> {
 	const { meta, samples } = collected;
 	if (!samples.length) return null;
@@ -471,7 +557,14 @@ async function decodeCollectedTrack(
 	}));
 
 	const codec = meta.codec.toLowerCase();
-	if (meta.type === 'mp4a' || codec.includes('mp4a') || codec.includes('aac') || codec.includes('40.')) {
+	if (
+		meta.type === 'mp4a' ||
+		codec.includes('mp4a') ||
+		codec.includes('aac') ||
+		codec.includes('40.')
+	) {
+		// decodeAudioData is atomic — nudge mid-decode then finish at 1.0 in the caller.
+		report?.(0.85, true);
 		const asc = findAscInDescriptionBoxes(meta.descriptionBoxes);
 		const adts = samplesToAdts(asSamples, asc, meta.sampleRate, meta.channelCount, maxSec);
 		const decoded = await decodeAdts(adts, maxSec);
@@ -498,7 +591,8 @@ async function decodeCollectedTrack(
 				}
 			})
 		},
-		maxSec
+		maxSec,
+		report
 	);
 }
 
@@ -506,7 +600,8 @@ async function collectTrackSamples(
 	file: File,
 	trackId: number,
 	maxSec: number,
-	signal?: AbortSignal
+	signal?: AbortSignal,
+	report?: (ratio: number, force?: boolean) => void
 ): Promise<{ meta: TrackRemuxMeta; samples: CollectedSample[] } | null> {
 	throwIfAborted(signal);
 	const { createFile, MP4BoxBuffer } = await import('mp4box');
@@ -520,6 +615,7 @@ async function collectTrackSamples(
 
 	const samples: CollectedSample[] = [];
 	let meta: TrackRemuxMeta | null = null;
+	const YIELD_EVERY = 6;
 
 	const ready = new Promise<void>((resolve, reject) => {
 		mp4.onError = (msg: string) => reject(new Error(msg || 'MP4 parse failed'));
@@ -539,7 +635,8 @@ async function collectTrackSamples(
 			meta = {
 				type: entry?.type || (String(track.codec).toLowerCase().includes('opus') ? 'Opus' : 'mp4a'),
 				codec: track.codec ?? '',
-				timescale: (track as { timescale?: number }).timescale || trak?.mdia?.mdhd?.timescale || 48000,
+				timescale:
+					(track as { timescale?: number }).timescale || trak?.mdia?.mdhd?.timescale || 48000,
 				channelCount: track.audio?.channel_count || entry?.channel_count || 2,
 				sampleSize: entry?.samplesize || 16,
 				sampleRate,
@@ -547,7 +644,7 @@ async function collectTrackSamples(
 			};
 			mp4.onSamples = (_id: number, _user: unknown, batch: Sample[]) => {
 				for (const sample of batch) {
-					if (sample.cts / sample.timescale > maxSec + 0.5) continue;
+					if (pastDurationCap(sample.cts, sample.timescale, maxSec, 0.5)) continue;
 					const data = copySampleData(sample.data);
 					if (!data.byteLength) continue;
 					samples.push({
@@ -578,43 +675,69 @@ async function collectTrackSamples(
 	const enoughSamples = () => {
 		if (samples.length === 0) return false;
 		const last = samples[samples.length - 1];
-		return last.cts / last.timescale >= Math.min(maxSec, 8) - 0.05;
+		// Preview: stop near maxSec. Full inject passes +Infinity → read until EOF.
+		return reachedDurationCap(last.cts, last.timescale, maxSec, 0.05);
 	};
 
+	// Bound chunk loops by file size (not a fixed ~1.5GB cap) so multi-GB Medal
+	// recordings can be fully demuxed for inject.
+	const maxChunks = Math.ceil(file.size / MP4_CHUNK_SIZE) + 16;
+
 	// Pass 1: find moov. Medal/ffmpeg often put moov at the end — probe the tail first.
+	report?.(0.02);
 	const tailBytes = Math.min(file.size, 8 * MP4_CHUNK_SIZE);
 	if (tailBytes > 0) {
 		await appendRange(file.size - tailBytes, file.size);
 	}
+	report?.(0.08);
 
 	if (!mp4.moov) {
 		let offset = 0;
 		const stopBeforeTail = Math.max(0, file.size - tailBytes);
 		let guard = 0;
-		while (!mp4.moov && offset < stopBeforeTail && guard < 1536) {
+		while (!mp4.moov && offset < stopBeforeTail && guard < maxChunks) {
 			guard += 1;
 			offset = await appendRange(offset, Math.min(offset + MP4_CHUNK_SIZE, stopBeforeTail));
+			// finding moov / pass 1: up to ~0.18
+			const pass1 =
+				stopBeforeTail > 0 ? Math.min(1, offset / stopBeforeTail) : 1;
+			report?.(0.08 + pass1 * 0.1);
+			if (guard % YIELD_EVERY === 0) {
+				await yieldToMain();
+				throwIfAborted(signal);
+				report?.(0.08 + pass1 * 0.1, true);
+			}
 		}
 	}
 
+	report?.(0.18);
 	try {
 		await ready;
 	} catch {
 		return null;
 	}
+	report?.(0.2, true);
 
 	// Pass 2: if mdat came before moov, payloads were discarded — re-read from the start
 	// with extraction already armed so onSamples receives real data.
 	if (!enoughSamples()) {
 		let offset = 0;
 		let guard = 0;
-		while (offset < file.size && guard < 1536 && !enoughSamples()) {
+		while (offset < file.size && guard < maxChunks && !enoughSamples()) {
 			guard += 1;
 			const end = Math.min(offset + MP4_CHUNK_SIZE, file.size);
 			try {
 				offset = await appendRange(offset, end);
 			} catch {
 				offset = end;
+			}
+			// pass 2 demux: map offset/file.size onto ~0.2–0.8
+			const fileSize = Math.max(1, file.size);
+			report?.(0.2 + Math.min(1, offset / fileSize) * 0.6);
+			if (guard % YIELD_EVERY === 0) {
+				await yieldToMain();
+				throwIfAborted(signal);
+				report?.(0.2 + Math.min(1, offset / fileSize) * 0.6, true);
 			}
 		}
 	}
@@ -626,6 +749,7 @@ async function collectTrackSamples(
 		/* ignore */
 	}
 
+	report?.(0.8, true);
 	if (!meta || samples.length === 0) return null;
 	return { meta, samples };
 }
@@ -635,7 +759,8 @@ async function decodeWithWebCodecs(
 	track: Mp4AudioTrackInfo,
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	mp4: any,
-	maxSec: number
+	maxSec: number,
+	report?: (ratio: number, force?: boolean) => void
 ): Promise<{ samples: Float32Array; sampleRate: number } | null> {
 	if (typeof AudioDecoder === 'undefined' || typeof EncodedAudioChunk === 'undefined') return null;
 
@@ -665,7 +790,11 @@ async function decodeWithWebCodecs(
 	const chunks: Float32Array[] = [];
 	let outRate = sampleRate;
 	let frames = 0;
-	const maxFrames = Math.ceil(sampleRate * maxSec);
+	const maxFrames = Number.isFinite(maxSec)
+		? Math.ceil(sampleRate * maxSec)
+		: Number.MAX_SAFE_INTEGER;
+	const DECODE_YIELD_EVERY = 200;
+	const totalSamples = Math.max(1, samples.length);
 
 	try {
 		await new Promise<void>((resolve, reject) => {
@@ -696,33 +825,47 @@ async function decodeWithWebCodecs(
 				error: (e) => reject(e)
 			});
 			decoder.configure(config);
-			for (const sample of samples) {
-				if (frames >= maxFrames) break;
-				if (sample.cts / sample.timescale > maxSec + 0.25) break;
-				const data =
-					sample.data instanceof Uint8Array
-						? sample.data
-						: new Uint8Array(
-								sample.data instanceof ArrayBuffer
-									? sample.data
-									: Uint8Array.from(sample.data as ArrayLike<number>)
-							);
-				decoder.decode(
-					new EncodedAudioChunk({
-						type: sample.is_sync ? 'key' : 'delta',
-						timestamp: Math.round((sample.cts / sample.timescale) * 1e6),
-						duration: Math.round((sample.duration / sample.timescale) * 1e6),
-						data
-					})
-				);
-			}
-			decoder
-				.flush()
-				.then(() => {
+
+			void (async () => {
+				try {
+					for (let i = 0; i < samples.length; i++) {
+						const sample = samples[i]!;
+						if (frames >= maxFrames) break;
+						if (pastDurationCap(sample.cts, sample.timescale, maxSec, 0.25)) break;
+						const data =
+							sample.data instanceof Uint8Array
+								? sample.data
+								: new Uint8Array(
+										sample.data instanceof ArrayBuffer
+											? sample.data
+											: Uint8Array.from(sample.data as ArrayLike<number>)
+									);
+						decoder.decode(
+							new EncodedAudioChunk({
+								type: sample.is_sync ? 'key' : 'delta',
+								timestamp: Math.round((sample.cts / sample.timescale) * 1e6),
+								duration: Math.round((sample.duration / sample.timescale) * 1e6),
+								data
+							})
+						);
+						if ((i + 1) % DECODE_YIELD_EVERY === 0) {
+							report?.(0.8 + Math.min(1, (i + 1) / totalSamples) * 0.2);
+							await yieldToMain();
+							report?.(0.8 + Math.min(1, (i + 1) / totalSamples) * 0.2, true);
+						}
+					}
+					await decoder.flush();
 					decoder.close();
 					resolve();
-				})
-				.catch(reject);
+				} catch (e) {
+					try {
+						decoder.close();
+					} catch {
+						/* ignore */
+					}
+					reject(e);
+				}
+			})();
 		});
 	} catch {
 		return null;

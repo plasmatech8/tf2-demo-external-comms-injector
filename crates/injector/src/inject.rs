@@ -1,6 +1,8 @@
 //! Demo inspection and voice-injection rewrite.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+#[cfg(feature = "extract")]
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -16,7 +18,7 @@ use tf_demo_parser::demo::packet::{Packet, PacketType};
 use tf_demo_parser::demo::parser::{DemoHandler, Encode, NullHandler, RawPacketStream};
 use tf_demo_parser::Demo;
 
-use crate::audio::{load_mono_pcm, Loudness};
+use crate::audio::{load_mono_pcm_from_bytes, Loudness};
 use crate::steam_voice::{SteamVoiceEncoder, DEFAULT_BITRATE, DEFAULT_SAMPLE_RATE};
 use crate::steamid::parse_steam_id;
 
@@ -75,6 +77,45 @@ pub struct InjectOptions {
     pub replace_existing: bool,
 }
 
+/// In-memory inject options (WASM / library callers). Audio must be PCM WAV bytes.
+#[derive(Debug, Clone)]
+pub struct InjectBytesOptions {
+    /// Demo-time inject start in seconds. `None` = auto `teamplay_round_start`, else `0`.
+    pub offset_secs: Option<f32>,
+    /// Seconds to drop from the start of the input audio (game start in the recording).
+    pub audio_skip_secs: f32,
+    pub loudness: Loudness,
+    pub player_name: Option<String>,
+    pub steam_id: Option<String>,
+    pub client_index: Option<u8>,
+    pub sample_rate: u32,
+    pub bitrate: i32,
+    pub replace_existing: bool,
+}
+
+impl Default for InjectBytesOptions {
+    fn default() -> Self {
+        Self {
+            offset_secs: None,
+            audio_skip_secs: 0.0,
+            loudness: Loudness::from_gain(1.0),
+            player_name: None,
+            steam_id: None,
+            client_index: None,
+            sample_rate: DEFAULT_SAMPLE_RATE,
+            bitrate: DEFAULT_BITRATE,
+            replace_existing: false,
+        }
+    }
+}
+
+/// Result of an in-memory inject (demo bytes + metadata).
+#[derive(Debug)]
+pub struct InjectBytesResult {
+    pub demo: Vec<u8>,
+    pub meta: InjectResult,
+}
+
 #[derive(Debug, Serialize)]
 pub struct InjectResult {
     pub output: String,
@@ -86,13 +127,21 @@ pub struct InjectResult {
     pub offset_source: String,
     pub audio_skip_secs: f32,
     pub packets_injected: usize,
+    /// Voice frames dropped because the demo ended before they could be scheduled.
+    #[serde(default)]
+    pub packets_truncated: usize,
     pub voice_init: Option<VoiceInitSummary>,
 }
 
 /// Inspect a demo for players, voice codec, and timing metadata.
 pub fn inspect_demo(path: &Path) -> Result<InspectReport> {
     let file = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
-    let demo = Demo::new(&file);
+    inspect_demo_bytes(&file)
+}
+
+/// Inspect demo bytes (no filesystem).
+pub fn inspect_demo_bytes(file: &[u8]) -> Result<InspectReport> {
+    let demo = Demo::new(file);
     let mut stream = demo.get_stream();
     let header = Header::read(&mut stream)?;
     let mut packets = RawPacketStream::new(stream);
@@ -237,15 +286,17 @@ fn player_from_entry(
 
 fn select_player<'a>(
     players: &'a [PlayerSlot],
-    opts: &InjectOptions,
+    client_index: Option<u8>,
+    steam_id: Option<&str>,
+    player_name: Option<&str>,
 ) -> Result<&'a PlayerSlot> {
-    if let Some(idx) = opts.client_index {
+    if let Some(idx) = client_index {
         return players
             .iter()
             .find(|p| p.client_index == idx)
             .ok_or_else(|| anyhow!("no player with client_index {idx}"));
     }
-    if let Some(sid) = &opts.steam_id {
+    if let Some(sid) = steam_id {
         let want = parse_steam_id(sid)?;
         if let Some(p) = players.iter().find(|p| p.steam_id64 == Some(want)) {
             return Ok(p);
@@ -254,11 +305,11 @@ fn select_player<'a>(
             return Ok(p);
         }
         // Fall through to --player when both were supplied; only hard-fail if name isn't set.
-        if opts.player_name.is_none() {
+        if player_name.is_none() {
             bail!("no player matching steam id {sid}");
         }
     }
-    if let Some(name) = &opts.player_name {
+    if let Some(name) = player_name {
         let needle = name.to_lowercase();
         let matches: Vec<_> = players
             .iter()
@@ -267,10 +318,10 @@ fn select_player<'a>(
         match matches.as_slice() {
             [one] => return Ok(one),
             [] => {
-                if opts.steam_id.is_some() {
+                if steam_id.is_some() {
                     bail!(
                         "no player matching steam id {:?} or name containing '{}'",
-                        opts.steam_id,
+                        steam_id,
                         name
                     );
                 }
@@ -294,8 +345,44 @@ fn select_player<'a>(
 
 /// Inject audio into a demo as Steam voice packets attributed to a player.
 pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
-    let report = inspect_demo(&opts.demo_path)?;
-    let player = select_player(&report.players, &opts)?.clone();
+    let demo = std::fs::read(&opts.demo_path)
+        .with_context(|| format!("read {}", opts.demo_path.display()))?;
+    let audio = std::fs::read(&opts.audio_path)
+        .with_context(|| format!("read {}", opts.audio_path.display()))?;
+    let bytes_opts = InjectBytesOptions {
+        offset_secs: opts.offset_secs,
+        audio_skip_secs: opts.audio_skip_secs,
+        loudness: opts.loudness,
+        player_name: opts.player_name,
+        steam_id: opts.steam_id,
+        client_index: opts.client_index,
+        sample_rate: opts.sample_rate,
+        bitrate: opts.bitrate,
+        replace_existing: opts.replace_existing,
+    };
+    let InjectBytesResult { demo: out, meta } = inject_comms_bytes(&demo, &audio, &bytes_opts)?;
+    std::fs::write(&opts.output_path, &out)
+        .with_context(|| format!("write {}", opts.output_path.display()))?;
+    Ok(InjectResult {
+        output: opts.output_path.display().to_string(),
+        ..meta
+    })
+}
+
+/// Inject audio WAV bytes into demo bytes. Returns the rewritten demo and metadata.
+pub fn inject_comms_bytes(
+    demo_bytes: &[u8],
+    audio_wav: &[u8],
+    opts: &InjectBytesOptions,
+) -> Result<InjectBytesResult> {
+    let report = inspect_demo_bytes(demo_bytes)?;
+    let player = select_player(
+        &report.players,
+        opts.client_index,
+        opts.steam_id.as_deref(),
+        opts.player_name.as_deref(),
+    )?
+    .clone();
     // Attribute voice to the resolved player slot's steam id. (--steam-id is a selector;
     // if it missed and we fell through to --player, do not stamp the unmatched id.)
     let steam_id64 = match player.steam_id64 {
@@ -317,7 +404,7 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
         );
     }
 
-    let mut pcm = load_mono_pcm(&opts.audio_path, opts.sample_rate, opts.loudness)?;
+    let mut pcm = load_mono_pcm_from_bytes(audio_wav, opts.sample_rate, opts.loudness)?;
     let audio_skip_secs = opts.audio_skip_secs.max(0.0);
     if audio_skip_secs > 0.0 {
         let skip = (audio_skip_secs * opts.sample_rate as f32).round() as usize;
@@ -357,11 +444,42 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
         })
         .collect();
 
+    let (out_buffer, packets_injected) = rewrite_demo_with_voice(
+        demo_bytes,
+        &schedule,
+        player.client_index,
+        start_tick,
+        opts.replace_existing,
+    )?;
+
+    let packets_truncated = schedule.len().saturating_sub(packets_injected);
+    Ok(InjectBytesResult {
+        demo: out_buffer,
+        meta: InjectResult {
+            output: String::new(),
+            player,
+            start_tick,
+            offset_secs,
+            offset_source: offset_source.to_string(),
+            audio_skip_secs,
+            packets_injected,
+            packets_truncated,
+            voice_init: report.voice_init,
+        },
+    })
+}
+
+fn rewrite_demo_with_voice(
+    file: &[u8],
+    schedule: &[(u32, Vec<u8>)],
+    client_index: u8,
+    start_tick: u32,
+    replace_existing: bool,
+) -> Result<(Vec<u8>, usize)> {
     // Surgical rewrite: keep original packet bytes intact. For Message packets that need
     // voice, copy the packet prefix + existing net-message bits and append VoiceData,
     // without re-encoding PacketEntities (full re-encode makes TF2 refuse playdemo).
-    let file = std::fs::read(&opts.demo_path)?;
-    let demo = Demo::new(&file);
+    let demo = Demo::new(file);
     let mut stream = demo.get_stream();
     let header = Header::read(&mut stream)?;
     let header_end_bits = stream.pos();
@@ -411,7 +529,7 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
         if let Packet::Message(msg) = &packet {
             let pkt_tick: u32 = msg.tick.into();
             strip_existing =
-                opts.replace_existing && pkt_tick >= start_tick && pkt_tick <= end_tick;
+                replace_existing && pkt_tick >= start_tick && pkt_tick <= end_tick;
             while sched_idx < schedule.len() && schedule[sched_idx].0 <= pkt_tick {
                 frames_for_packet.push(schedule[sched_idx].1.clone());
                 sched_idx += 1;
@@ -438,7 +556,7 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
             let rewritten = rewrite_message_packet_append_voice(
                 &file[packet_start..packet_end],
                 &frames_for_packet,
-                player.client_index,
+                client_index,
                 strip_existing,
                 &encode_handler.state_handler,
             )?;
@@ -454,9 +572,9 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
     }
 
     if sched_idx < schedule.len() {
-        bail!(
-            "demo ended before all voice frames could be placed ({} remaining). \
-             Try an earlier --offset",
+        // Medal / VODs often run longer than the demo (post-game, lobby). Place what fits.
+        eprintln!(
+            "warning: demo ended with {} voice frames remaining; truncating audio to fit",
             schedule.len() - sched_idx
         );
     }
@@ -474,21 +592,7 @@ pub fn inject_comms(opts: InjectOptions) -> Result<InjectResult> {
 
     // Original header.signon is preserved (we never rewrite the signon region).
     let _ = header;
-
-    let packets_injected = schedule.len();
-    std::fs::write(&opts.output_path, &out_buffer)
-        .with_context(|| format!("write {}", opts.output_path.display()))?;
-
-    Ok(InjectResult {
-        output: opts.output_path.display().to_string(),
-        player,
-        start_tick,
-        offset_secs,
-        offset_source: offset_source.to_string(),
-        audio_skip_secs,
-        packets_injected,
-        voice_init: report.voice_init,
-    })
+    Ok((out_buffer, sched_idx))
 }
 
 fn resolve_demo_offset(
@@ -582,6 +686,7 @@ fn rewrite_message_packet_append_voice(
 }
 
 /// Extract all Steam voice payloads from a demo into a mono WAV (mixed).
+#[cfg(feature = "extract")]
 pub fn extract_voice_wav(demo_path: &Path, out_wav: &Path) -> Result<ExtractStats> {
     let file = std::fs::read(demo_path)?;
     let demo = Demo::new(&file);
@@ -624,6 +729,7 @@ pub struct ExtractStats {
     pub output: String,
 }
 
+#[cfg(feature = "extract")]
 struct DecodedVoice {
     packets: usize,
     pcm: Vec<i16>,
@@ -631,6 +737,7 @@ struct DecodedVoice {
     sample_rate: u32,
 }
 
+#[cfg(feature = "extract")]
 struct VoiceExtract {
     decoder: steam_audio_codec::SteamVoiceDecoder,
     out_buffer: Vec<i16>,
@@ -640,6 +747,7 @@ struct VoiceExtract {
     sample_rate: u32,
 }
 
+#[cfg(feature = "extract")]
 impl VoiceExtract {
     fn new() -> Self {
         Self {
@@ -653,6 +761,7 @@ impl VoiceExtract {
     }
 }
 
+#[cfg(feature = "extract")]
 impl tf_demo_parser::demo::parser::MessageHandler for VoiceExtract {
     type Output = DecodedVoice;
 
@@ -706,8 +815,6 @@ impl tf_demo_parser::demo::parser::MessageHandler for VoiceExtract {
 #[cfg(test)]
 mod select_player_tests {
     use super::*;
-    use crate::audio::Loudness;
-    use std::path::PathBuf;
 
     fn slot(name: &str, steam_id64: u64, client_index: u8) -> PlayerSlot {
         PlayerSlot {
@@ -720,23 +827,6 @@ mod select_player_tests {
         }
     }
 
-    fn opts(steam_id: Option<&str>, player_name: Option<&str>) -> InjectOptions {
-        InjectOptions {
-            demo_path: PathBuf::from("x.dem"),
-            audio_path: PathBuf::from("x.wav"),
-            output_path: PathBuf::from("out.dem"),
-            offset_secs: None,
-            audio_skip_secs: 0.0,
-            loudness: Loudness::from_gain(1.0),
-            player_name: player_name.map(str::to_string),
-            steam_id: steam_id.map(str::to_string),
-            client_index: None,
-            sample_rate: crate::steam_voice::DEFAULT_SAMPLE_RATE,
-            bitrate: crate::steam_voice::DEFAULT_BITRATE,
-            replace_existing: false,
-        }
-    }
-
     #[test]
     fn steam_id_miss_falls_through_to_player_name() {
         let players = vec![
@@ -745,7 +835,9 @@ mod select_player_tests {
         ];
         let chosen = select_player(
             &players,
-            &opts(Some("76561198000000999"), Some("plasma")),
+            None,
+            Some("76561198000000999"),
+            Some("plasma"),
         )
         .unwrap();
         assert_eq!(chosen.name, "plasmatech8");
@@ -755,7 +847,7 @@ mod select_player_tests {
     #[test]
     fn steam_id_miss_without_player_name_errors() {
         let players = vec![slot("alice", 76561198000000001, 1)];
-        let err = select_player(&players, &opts(Some("76561198000000999"), None)).unwrap_err();
+        let err = select_player(&players, None, Some("76561198000000999"), None).unwrap_err();
         assert!(err.to_string().contains("steam id"), "{err}");
     }
 }

@@ -1,9 +1,11 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { fade, slide } from 'svelte/transition';
 	import FileField from '$lib/components/FileField.svelte';
 	import Hint from '$lib/components/Hint.svelte';
 	import LoadingStatus from '$lib/components/LoadingStatus.svelte';
+	import ProgressBar from '$lib/components/ProgressBar.svelte';
+	import SpeakerSelect from '$lib/components/SpeakerSelect.svelte';
 	import { listDemoPlayers, type DemoPlayer } from '$lib/demo/players';
 	import { previewAroundGameStart, type PreviewHandle } from '$lib/media/preview';
 	import { previewMediaSource, primeAudioContext } from '$lib/media/source-preview';
@@ -13,10 +15,14 @@
 	let mediaFile = $state<File | null>(null);
 	/** Seconds into the media until game start / GO. Defaults to 5. */
 	let mediaGameStart = $state<number | null>(5);
+	/** String draft for the game-start field so typing isn't rewritten by toFixed. */
+	let gameStartDraft = $state('5.0');
 	let selectedPlayerId = $state('');
 	let selectedSources = $state<string[]>([]);
-	let notesOpen = $state(false);
 	let generating = $state(false);
+	/** 0–100 while generating; cleared when idle. */
+	let generateProgress = $state(0);
+	let generateStatus = $state('');
 	let successMessage = $state<string | null>(null);
 	let errorMessage = $state<string | null>(null);
 	let ready = $state(false);
@@ -39,6 +45,8 @@
 	let mediaLoadGen = 0;
 	let sourcePreviewGen = 0;
 	let gameStartPreviewGen = 0;
+	/** Cancels in-flight prepare when demo/media is swapped or Generate restarts. */
+	let generateAbort: AbortController | null = null;
 
 	const selectedPlayer = $derived(
 		players.find((p) => String(p.userId) === selectedPlayerId) ?? null
@@ -129,9 +137,48 @@
 		}
 	}
 
+	const GAME_START_DRAFT_RE = /^\d*\.?\d*$/;
+
+	/** Keep digits and at most one decimal point; don't otherwise fight the user. */
+	function sanitizeGameStartDraft(raw: string): string {
+		const cleaned = raw.replace(/[^\d.]/g, '');
+		const dot = cleaned.indexOf('.');
+		if (dot === -1) return cleaned;
+		return cleaned.slice(0, dot + 1) + cleaned.slice(dot + 1).replace(/\./g, '');
+	}
+
+	function syncMediaGameStartFromDraft(draft: string) {
+		if (draft === '' || draft === '.' || !GAME_START_DRAFT_RE.test(draft)) {
+			mediaGameStart = null;
+			return;
+		}
+		const v = Number(draft);
+		mediaGameStart = Number.isFinite(v) && v >= 0 ? v : null;
+	}
+
 	function onGameStartInput(e: Event) {
-		const v = (e.currentTarget as HTMLInputElement).valueAsNumber;
-		mediaGameStart = Number.isFinite(v) ? Math.round(v * 10) / 10 : null;
+		const el = e.currentTarget as HTMLInputElement;
+		const draft = sanitizeGameStartDraft(el.value);
+		gameStartDraft = draft;
+		// Force DOM sync when Svelte skips the update (draft unchanged after sanitize).
+		if (el.value !== draft) el.value = draft;
+		syncMediaGameStartFromDraft(draft);
+	}
+
+	function onGameStartBlur() {
+		const draft = gameStartDraft.trim();
+		if (draft === '' || draft === '.' || !GAME_START_DRAFT_RE.test(draft)) {
+			mediaGameStart = null;
+			return;
+		}
+		const v = Number(draft);
+		if (!Number.isFinite(v) || v < 0) {
+			mediaGameStart = null;
+			return;
+		}
+		const rounded = Math.round(v * 10) / 10;
+		mediaGameStart = rounded;
+		gameStartDraft = rounded.toFixed(1);
 	}
 
 	async function onPreview() {
@@ -167,6 +214,8 @@
 
 	async function setDemoFile(file: File | null) {
 		const token = (demoLoadGen += 1);
+		generateAbort?.abort();
+		generateAbort = null;
 		demoFile = file;
 		players = [];
 		selectedPlayerId = '';
@@ -201,11 +250,14 @@
 		const token = (mediaLoadGen += 1);
 		stopPreview();
 		stopSourcePreview();
+		generateAbort?.abort();
+		generateAbort = null;
 		mediaFile = file;
 		mediaInfo = null;
 		selectedSources = [];
 		mediaError = null;
 		mediaGameStart = file ? 5 : null;
+		gameStartDraft = file ? '5.0' : '';
 		successMessage = null;
 		errorMessage = null;
 
@@ -244,40 +296,129 @@
 		return `${base}_with_comms.dem`;
 	}
 
-	function playerLabel(player: DemoPlayer): string {
-		const team = player.team ? ` · ${player.team}` : '';
-		return `${player.name}${team}`;
+	/** Map overall generate progress; status drives the bar label. */
+	function setGenerateProgress(status: string, percent: number) {
+		generateStatus = status;
+		generateProgress = Math.min(100, Math.max(0, percent));
+	}
+
+	/** Let Svelte flush + the browser paint before a long sync stretch. */
+	async function paintProgress() {
+		await tick();
+		await new Promise<void>((r) => requestAnimationFrame(() => r()));
 	}
 
 	async function onGenerate() {
 		if (!canGenerate || !demoFile || !mediaFile || !selectedPlayer || !gameStartValid) return;
+		if (mediaGameStart === null) return;
+
+		generateAbort?.abort();
+		generateAbort = new AbortController();
+		const signal = generateAbort.signal;
 
 		generating = true;
 		successMessage = null;
 		errorMessage = null;
-
-		await new Promise((r) => setTimeout(r, 1250));
+		setGenerateProgress('Loading modules…', 2);
+		stopPreview();
+		stopSourcePreview();
 
 		const outName = downloadName(demoFile.name);
-		const blob = new Blob(
-			[
-				`TF2 demo placeholder — ${outName}\n`,
-				`speaker=${selectedPlayer.name} (${selectedPlayer.steamId})\n`,
-				`mediaGameStart=${mediaGameStart}\n`,
-				`sources=${selectedSources.join(',')}\n`,
-				`(mock output; no real processing)\n`
-			],
-			{ type: 'application/octet-stream' }
-		);
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = outName;
-		a.click();
-		URL.revokeObjectURL(url);
+		const requestDemo = demoFile;
+		const requestMedia = mediaFile;
+		const requestPlayer = selectedPlayer;
+		const requestStart = mediaGameStart;
+		const requestSources = [...selectedSources];
+		const sourcesSnapshot = mediaInfo?.sources ?? [];
+		const stillCurrent = () => demoFile === requestDemo && mediaFile === requestMedia;
 
-		generating = false;
-		successMessage = `Downloaded ${outName}`;
+		try {
+			const [{ prepareInjectWav }, { injectCommsWasm, preloadInjectorWasm }] = await Promise.all([
+				import('$lib/media/prepare-inject'),
+				import('$lib/wasm/injector')
+			]);
+			if (!stillCurrent()) return;
+			// Warm WASM during audio prep so first inject isn’t “load wasm + encode”.
+			void preloadInjectorWasm();
+			setGenerateProgress('Preparing audio…', 5);
+
+			const audioWav = await prepareInjectWav(
+				requestMedia,
+				sourcesSnapshot,
+				requestSources,
+				(msg, ratio = 0) => {
+					if (!stillCurrent()) return;
+					// Prepare phase maps onto ~5–70%.
+					setGenerateProgress(msg, 5 + Math.min(1, Math.max(0, ratio)) * 65);
+				},
+				signal
+			);
+			if (!stillCurrent()) return;
+
+			setGenerateProgress('Reading demo…', 72);
+			// Yield so the progress label can paint before the next sync-ish work.
+			await paintProgress();
+			const demoBytes = new Uint8Array(await requestDemo.arrayBuffer());
+			if (!stillCurrent()) return;
+
+			setGenerateProgress('Injecting voice into demo…', 78);
+			// inject_comms is CPU-sync once WASM is loaded; without a paint yield the UI
+			// still shows “Reading demo…” for the whole inject (looks like variable read time).
+			await paintProgress();
+			const { demo, meta } = await injectCommsWasm({
+				demo: demoBytes,
+				audioWav,
+				audioSkipSecs: requestStart,
+				playerName: requestPlayer.name,
+				steamId: requestPlayer.steamId,
+				sampleRate: 24_000,
+				bitrate: 64_000
+			});
+
+			if (!stillCurrent()) return;
+
+			setGenerateProgress('Downloading…', 95);
+
+			const blob = new Blob([demo.slice()], { type: 'application/octet-stream' });
+			const url = URL.createObjectURL(blob);
+			const a = document.createElement('a');
+			a.href = url;
+			a.download = outName;
+			a.click();
+			URL.revokeObjectURL(url);
+
+			setGenerateProgress('Done', 100);
+
+			const trunc =
+				meta.packets_truncated && meta.packets_truncated > 0
+					? `, truncated ${meta.packets_truncated} (audio longer than demo)`
+					: '';
+			successMessage = `Downloaded ${outName} (${meta.packets_injected} voice packets${trunc}, offset ${meta.offset_secs.toFixed(2)}s via ${meta.offset_source})`;
+			errorMessage = null;
+			// Let the bar paint at 100% briefly before generating clears.
+			await new Promise((r) => setTimeout(r, 280));
+		} catch (e) {
+			const isAbort =
+				(e instanceof DOMException || e instanceof Error) && e.name === 'AbortError';
+			if (isAbort || !stillCurrent()) return;
+			successMessage = null;
+			if (e instanceof Error && e.message) {
+				errorMessage = e.message;
+			} else if (typeof e === 'string' && e) {
+				errorMessage = e;
+			} else {
+				try {
+					errorMessage = JSON.stringify(e) || 'Injection failed.';
+				} catch {
+					errorMessage = String(e || 'Injection failed.');
+				}
+			}
+		} finally {
+			// Always clear — even if the user swapped demo/media mid-run and we aborted.
+			generating = false;
+			generateProgress = 0;
+			generateStatus = '';
+		}
 	}
 
 	function sourceLegend(info: MediaInspection): string {
@@ -301,6 +442,9 @@
 				class="mt-2 font-[family-name:var(--font-display)] text-lg font-medium tracking-wide text-[var(--color-muted)] uppercase sm:text-xl"
 			>
 				External Comms Audio Injection Tool
+			</p>
+			<p class="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">
+				Injects an external audio recording into the demo as in-game voice&nbsp;chat.
 			</p>
 		</header>
 
@@ -344,18 +488,7 @@
 								{playersError}
 							</p>
 						{:else if players.length > 0}
-							<select
-								id="speaker"
-								bind:value={selectedPlayerId}
-								class="w-full rounded border-[var(--color-border)] bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)]
-									focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]"
-							>
-								{#each players as player (player.userId)}
-									<option value={String(player.userId)}
-										>{playerLabel(player)} — {player.steamId}</option
-									>
-								{/each}
-							</select>
+							<SpeakerSelect id="speaker" players={players} bind:value={selectedPlayerId} />
 						{/if}
 					</div>
 				{/if}
@@ -387,15 +520,14 @@
 							</div>
 							<input
 								id="media-game-start"
-								type="number"
-								min="0"
-								step="0.1"
+								type="text"
 								required
 								placeholder="e.g. 5.0"
 								autocomplete="off"
 								inputmode="decimal"
-								value={mediaGameStart === null ? '' : mediaGameStart.toFixed(1)}
+								value={gameStartDraft}
 								oninput={onGameStartInput}
+								onblur={onGameStartBlur}
 								aria-invalid={showGameStartNeeded}
 								class="w-full rounded border bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)] placeholder:text-[var(--color-muted)]
 									focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]
@@ -480,6 +612,9 @@
 										</div>
 									{/each}
 								</div>
+								{#if mediaInfo.selectionHint && selectedSources.length === 0}
+									<p class="text-xs text-[var(--color-muted)]">{mediaInfo.selectionHint}</p>
+								{/if}
 							{/if}
 						</div>
 					</div>
@@ -490,20 +625,21 @@
 				<button
 					type="submit"
 					disabled={!canGenerate}
+					aria-busy={generating}
 					class="w-full rounded border border-transparent bg-[var(--color-accent)] px-4 py-3
 						font-[family-name:var(--font-display)] text-lg font-semibold tracking-wider text-[var(--color-fg-strong)] uppercase
 						transition-[background-color,transform,opacity] duration-150
 						enabled:hover:bg-[var(--color-accent-hover)] enabled:active:scale-[0.98]
 						disabled:cursor-not-allowed disabled:opacity-40"
 				>
-					{#if generating}
-						Generating…
-					{:else}
-						Generate &amp; download
-					{/if}
+					{generating ? 'Generating…' : 'Generate & download'}
 				</button>
 
-				{#if successMessage}
+				{#if generating}
+					<div class="mt-3" transition:fade={{ duration: 160 }}>
+						<ProgressBar value={generateProgress} label={generateStatus || 'Working…'} />
+					</div>
+				{:else if successMessage}
 					<p
 						class="mt-3 text-sm text-[var(--color-success)]"
 						role="status"
@@ -518,29 +654,4 @@
 			</div>
 		</form>
 	</div>
-
-	<footer class="mt-10 border-t border-[var(--color-border)] pt-6 pb-2">
-		<button
-			type="button"
-			class="flex w-full items-center justify-between text-left text-xs tracking-wide text-[var(--color-muted)] uppercase
-				hover:text-[var(--color-fg)]"
-			aria-expanded={notesOpen}
-			onclick={() => (notesOpen = !notesOpen)}
-		>
-			<span>Notes / coming soon</span>
-			<span aria-hidden="true">{notesOpen ? '−' : '+'}</span>
-		</button>
-
-		{#if notesOpen}
-			<ul
-				class="mt-3 list-disc space-y-1 pl-4 text-xs leading-relaxed text-[var(--color-muted)]"
-				transition:slide={{ duration: 160 }}
-			>
-				<li>
-					Generate currently mocks download only — no processing yet. Files stay in the browser.
-				</li>
-				<li>Track inspect reads MP4 metadata in chunks (not the whole video).</li>
-			</ul>
-		{/if}
-	</footer>
 </main>

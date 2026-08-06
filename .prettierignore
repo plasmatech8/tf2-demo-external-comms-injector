@@ -10,3 +10,6 @@ bun.lockb
 
 # Generated
 worker-configuration.d.ts
+
+# Generated WASM package
+src/lib/wasm/pkg/

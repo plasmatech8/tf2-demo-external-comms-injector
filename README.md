@@ -1,11 +1,12 @@
 # TF2 Demo External Comms Injector
 
-Inject external audio into Team Fortress 2 `.dem` files as Steam voice chat. The **SvelteKit UI** lives at the repo root (Cloudflare Workers host); the **Rust engine** is a self-contained crate.
+Inject external audio into Team Fortress 2 `.dem` files as Steam voice chat. The **SvelteKit UI** lives at the repo root (Cloudflare Workers host); the **Rust engine** is a self-contained crate compiled to **WASM** for in-browser injection.
 
-| Path | Role |
-|------|------|
-| `/` | SvelteKit UI + Cloudflare Workers host |
-| [`crates/injector/`](crates/injector/) | Rust library + CLIs |
+| Path                                   | Role                                   |
+| -------------------------------------- | -------------------------------------- |
+| `/`                                    | SvelteKit UI + Cloudflare Workers host |
+| [`crates/injector/`](crates/injector/) | Rust library + CLIs (+ WASM target)    |
+| [`src/lib/wasm/`](src/lib/wasm/)       | Prebuilt WASM package used by the UI   |
 
 ## UI (repo root)
 
@@ -19,7 +20,18 @@ npm run build
 npm run preview
 ```
 
-Generate is still mocked in the UI — real injection lands in a follow-up. Engine details stay in the crate.
+Generate runs the Rust injector in the browser via WASM. Demo + audio stay on-device; the Cloudflare Worker only hosts the static app.
+
+### Rebuild WASM
+
+Requires Rust (`rustup` toolchain from `crates/injector/rust-toolchain.toml`) and `wasm-bindgen-cli` matching the crate’s `wasm-bindgen` version:
+
+```sh
+cargo install wasm-bindgen-cli --version 0.2.126
+npm run build:wasm
+```
+
+Prebuilt artifacts under `src/lib/wasm/pkg/` are committed so `npm run build` works without a Rust toolchain (e.g. Cloudflare).
 
 ## Rust engine
 

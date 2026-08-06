@@ -30,7 +30,10 @@ export function primeAudioContext(): AudioContext | null {
 	return ctx;
 }
 
-function mixBufferToMono(audio: AudioBuffer, maxSec: number): { samples: Float32Array; sampleRate: number } {
+function mixBufferToMono(
+	audio: AudioBuffer,
+	maxSec: number
+): { samples: Float32Array; sampleRate: number } {
 	const frames = Math.min(audio.length, Math.floor(audio.sampleRate * maxSec));
 	const samples = new Float32Array(frames);
 	const ch = audio.numberOfChannels;
@@ -209,8 +212,18 @@ async function playWavChannelHead(
 	const headerBuf = await file.slice(0, Math.min(file.size, 65536)).arrayBuffer();
 	const view = new DataView(headerBuf);
 	if (headerBuf.byteLength < 44) return null;
-	const riff = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
-	const wave = String.fromCharCode(view.getUint8(8), view.getUint8(9), view.getUint8(10), view.getUint8(11));
+	const riff = String.fromCharCode(
+		view.getUint8(0),
+		view.getUint8(1),
+		view.getUint8(2),
+		view.getUint8(3)
+	);
+	const wave = String.fromCharCode(
+		view.getUint8(8),
+		view.getUint8(9),
+		view.getUint8(10),
+		view.getUint8(11)
+	);
 	if (riff !== 'RIFF' || wave !== 'WAVE') return null;
 
 	let offset = 12;
@@ -291,9 +304,8 @@ function playMediaElement(
 	}
 
 	const url = URL.createObjectURL(file);
-	const media = document.createElement(
-		file.type.startsWith('video/') ? 'video' : 'audio'
-	) as HTMLVideoElement | HTMLAudioElement;
+	const media = document.createElement(file.type.startsWith('video/') ? 'video' : 'audio') as
+		HTMLVideoElement | HTMLAudioElement;
 	media.src = url;
 	media.preload = 'auto';
 	if ('playsInline' in media) (media as HTMLVideoElement).playsInline = true;

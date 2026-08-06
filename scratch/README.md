@@ -4,13 +4,13 @@ Drop demos / audio / video here for one-off manual testing. Everything except th
 
 ## Current manual-test set
 
-| File | Notes |
-|------|--------|
-| `MedalTV…mp4` | Source recording (multi-track: All Audio / game / Discord / Mic) |
-| `start_time.txt` | Video “GO” ≈ 3s → use as `--audio-skip` |
-| `sultry.dem` | Original STV demo (`teamplay_round_start` ≈ 5.01s, auto `--offset`) |
-| `comms.wav` | Discord+Mic @ 24 kHz. **Already** ffmpeg `-ss 3`’d (GO at t=0 in this file) → use `--audio-skip 0`. For a raw export, skip GO with `--audio-skip` instead of ffmpeg `-ss`. |
-| `sultry_with_comms.dem` | Last known-good inject (may be older than HEAD; regen with recipe below) |
+| File                    | Notes                                                                                                                                                                      |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MedalTV…mp4`           | Source recording (multi-track: All Audio / game / Discord / Mic)                                                                                                           |
+| `start_time.txt`        | Video “GO” ≈ 3s → use as `--audio-skip`                                                                                                                                    |
+| `sultry.dem`            | Original STV demo (`teamplay_round_start` ≈ 5.01s, auto `--offset`)                                                                                                        |
+| `comms.wav`             | Discord+Mic @ 24 kHz. **Already** ffmpeg `-ss 3`’d (GO at t=0 in this file) → use `--audio-skip 0`. For a raw export, skip GO with `--audio-skip` instead of ffmpeg `-ss`. |
+| `sultry_with_comms.dem` | Last known-good inject (may be older than HEAD; regen with recipe below)                                                                                                   |
 
 Open with Demoman from this folder.
 

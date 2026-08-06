@@ -6,11 +6,11 @@ Produce a modified `.dem` such that TF2's built-in demo viewer plays external au
 
 ## Why voice injection (vs alternatives)
 
-| Approach | Pros | Cons |
-|----------|------|------|
+| Approach                                       | Pros                                                                        | Cons                                                                                   |
+| ---------------------------------------------- | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | **Demo `svc_VoiceData` injection** (this repo) | Stays inside Valve's playback path; no runtime hooks; sync is tick-accurate | Must match Steam Voice framing; STV must use `steam` codec; needs in-game confirmation |
-| Client mod selecting a WAV | Flexible UX | VAC/mod risk, install friction, sync with demo tick is still hard |
-| External app hooking TF2 / mixing overlays | Can use any audio | Security-sensitive, brittle across updates, not “in the demo” |
+| Client mod selecting a WAV                     | Flexible UX                                                                 | VAC/mod risk, install friction, sync with demo tick is still hard                      |
+| External app hooking TF2 / mixing overlays     | Can use any audio                                                           | Security-sensitive, brittle across updates, not “in the demo”                          |
 
 ## Demo container (Source DEM)
 
@@ -76,7 +76,7 @@ This does **not** prove the TF2 client’s voice mixer will accept the packets (
 
 - **tf-demo-parser** (demostf) — parse + encode demos (`write` feature; vendored because crates.io 0.6.4 omits it)
 - **steam-audio-codec** — decode/validate Steam Voice
-- **demboyz** — C++ dem↔json and voice *extraction* (needs Steam API for decode); README jokes about adding phony voice, which matches this use-case
+- **demboyz** — C++ dem↔json and voice _extraction_ (needs Steam API for decode); README jokes about adding phony voice, which matches this use-case
 
 ## Timing
 
