@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="TF2 Demo External Comms Injector">
+	<rect x="6" y="6" width="116" height="116" rx="28" fill="#1c2229" stroke="#6b7785" stroke-width="4"/>
+	<path fill="#eef1f4" d="M28 59h22V49l20 15-20 15V69H28z"/>
+	<rect x="72" y="46" width="10" height="36" rx="5" fill="#c45c28"/>
+	<rect x="88" y="34" width="10" height="60" rx="5" fill="#c45c28"/>
+	<rect x="104" y="52" width="10" height="24" rx="5" fill="#c45c28"/>
+</svg>

@@ -33,12 +33,13 @@ path = "src/bin/dump_events.rs"
 required-features = ["cli"]
 
 [features]
-default = ["native-opus", "extract", "cli"]
+default = ["native-opus", "cli"]
 # libopus FFI (native CLI / tests). Preferred when available.
 native-opus = ["dep:opus"]
 # Pure-Rust Opus for browser WASM (no C toolchain).
 wasm-opus = ["dep:rusty-opus"]
-# Voice extract / decode round-trips (needs steam-audio-codec → native opus).
+# Optional voice extract / decode round-trips (EUPL-1.2 steam-audio-codec).
+# Opt in: cargo test --features extract / cargo build --release --features extract
 extract = ["dep:steam-audio-codec"]
 # CLI binaries (clap).
 cli = ["dep:clap"]

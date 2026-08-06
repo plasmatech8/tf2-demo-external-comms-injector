@@ -5,7 +5,6 @@ use tempfile::tempdir;
 use tf2_demo_comms_injector::steam_voice::{
     steam_crc32, SteamVoiceEncoder, DEFAULT_SAMPLE_RATE, FRAME_SAMPLES,
 };
-use steam_audio_codec::SteamVoiceData;
 
 #[test]
 fn encoder_packets_are_crc_valid_and_sized() {
@@ -15,10 +14,22 @@ fn encoder_packets_are_crc_valid_and_sized() {
     assert_eq!(packets.len(), 3);
     for pkt in packets {
         assert!(pkt.len() > 16);
-        SteamVoiceData::new(&pkt).expect("crc");
         let (body, crc_bytes) = pkt.split_at(pkt.len() - 4);
         let crc = u32::from_le_bytes(crc_bytes.try_into().unwrap());
         assert_eq!(crc, steam_crc32(body));
+    }
+}
+
+#[test]
+#[cfg(feature = "extract")]
+fn encoder_packets_validate_via_steam_audio_codec() {
+    use steam_audio_codec::SteamVoiceData;
+
+    let mut enc = SteamVoiceEncoder::new(76561198081400087, DEFAULT_SAMPLE_RATE).unwrap();
+    let pcm = vec![1000i16; FRAME_SAMPLES * 3];
+    let packets = enc.encode_pcm(&pcm).unwrap();
+    for pkt in packets {
+        SteamVoiceData::new(&pkt).expect("crc");
     }
 }
 

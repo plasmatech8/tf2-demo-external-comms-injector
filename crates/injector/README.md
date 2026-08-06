@@ -6,11 +6,12 @@ This crate lives at `crates/injector/`. Run Cargo commands from **this directory
 
 ## Status
 
-Working end-to-end **offline**:
+Working end-to-end **offline** (inject path; default features):
 
 1. Encode PCM → Steam Voice (Opus PLC wrapper + CRC32)
 2. Rewrite a SourceTV demo, inserting `svc_VoiceData` at chosen ticks
-3. Round-trip verify by extracting/decoding voice back to WAV
+
+Optional `--features extract` adds decode-back-to-WAV verification (`extract-voice`).
 
 **In-game TF2 playback is not verified in this environment** (no TF2 client). Structural + decode verification is strong; please confirm with `playdemo` on a gaming PC.
 
@@ -39,7 +40,7 @@ cargo build --release
   --offset 10 \
   --loudness-db 0
 
-# Extract voice back out (offline verification)
+# Extract voice back out (optional; needs --features extract when building)
 ./target/release/extract-voice samples/injected.dem -o samples/extracted.wav
 ```
 
@@ -103,6 +104,8 @@ Run the automated suite from this crate directory:
 
 ```bash
 cargo test
+# Decode round-trip (opt-in; pulls EUPL-1.2 steam-audio-codec):
+cargo test --features extract
 ./scripts/e2e_roundtrip.sh
 ```
 
@@ -148,4 +151,6 @@ Local manual-test demos/audio/video live in repo-root [`scratch/`](../../scratch
 
 ## License
 
-MIT (see repo-root `LICENSE`). `vendor/tf-demo-parser` retains its upstream MIT/Apache-2.0 license.
+MIT (see repo-root `LICENSE`). Vendored `tf-demo-parser` is MIT OR Apache-2.0.
+
+The optional `--features extract` path depends on `steam-audio-codec` (EUPL-1.2) for decode/round-trip tools only. Default builds, the inject CLIs, and the browser WASM path do not enable it.

@@ -8,7 +8,8 @@ export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_
 export LD_LIBRARY_PATH="/usr/local/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 ./scripts/fetch_sample_demo.sh
-cargo build --release -q
+# extract-voice needs the optional EUPL-licensed steam-audio-codec feature
+cargo build --release --features extract -q
 
 DEMO="samples/match-20260717-1011-koth_proot_b6c-alt2.dem"
 AUDIO="samples/test_tone_440hz.wav"
