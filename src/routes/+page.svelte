@@ -10,6 +10,7 @@
 	import { previewAroundGameStart, type PreviewHandle } from '$lib/media/preview';
 	import { previewMediaSource, primeAudioContext } from '$lib/media/source-preview';
 	import { inspectMedia, type MediaInspection, type MediaSource } from '$lib/media/tracks';
+	import { SITE_DESCRIPTION } from '$lib/site';
 
 	let demoFile = $state<File | null>(null);
 	let mediaFile = $state<File | null>(null);
@@ -461,10 +462,7 @@
 				External Comms Audio Injection Tool
 			</p>
 			<p class="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">
-				Injects an external audio recording into the demo as in-game voice&nbsp;chat, so you can
-				review gameplay and comms together in the built-in demo player—staying in sync even when
-				you change playback speed. No more running the demo and a separate recording side by side
-				and constantly pausing to line them up.
+				{SITE_DESCRIPTION}
 			</p>
 		</header>
 
@@ -495,7 +493,9 @@
 							<label for="speaker" class="text-sm font-medium text-[var(--color-muted)]">
 								Speaker
 							</label>
-							<Hint text="Who the injected voice belongs to in this demo." />
+							<Hint
+								text="Who the injected voice belongs to in this demo—their name appears on the in-game voice indicator."
+							/>
 						</div>
 
 						{#if playersLoading}
