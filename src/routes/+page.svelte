@@ -493,9 +493,7 @@
 							<label for="speaker" class="text-sm font-medium text-[var(--color-muted)]">
 								Speaker
 							</label>
-							<Hint
-								text="Who the injected voice belongs to in this demo—their name appears on the in-game voice indicator."
-							/>
+							<Hint text="Who the injected voice belongs to in this demo." />
 						</div>
 
 						{#if playersLoading}
