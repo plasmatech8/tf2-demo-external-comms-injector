@@ -10,6 +10,7 @@
 	import { previewAroundGameStart, type PreviewHandle } from '$lib/media/preview';
 	import { previewMediaSource, primeAudioContext } from '$lib/media/source-preview';
 	import { inspectMedia, type MediaInspection, type MediaSource } from '$lib/media/tracks';
+	import { SITE_DESCRIPTION } from '$lib/site';
 
 	let demoFile = $state<File | null>(null);
 	let mediaFile = $state<File | null>(null);
@@ -461,7 +462,7 @@
 				External Comms Audio Injection Tool
 			</p>
 			<p class="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">
-				Injects an external audio recording into the demo as in-game voice&nbsp;chat.
+				{SITE_DESCRIPTION}
 			</p>
 		</header>
 

@@ -7,11 +7,11 @@
   </picture>
 </p>
 
-<p align="center"><b>Inject external audio into TF2 demos as in-game voice chat</b></p>
+<p align="center"><b>Review TF2 demos with external comms synced in the built-in player</b></p>
 
-**TF2 Demo External Comms Injector** turns an audio recording — or the audio from a video (e.g. Medal, OBS) — into Steam voice packets inside a SourceTV `.dem`, so the built-in demo player plays your comms in sync with the match.
+Injects an external audio recording into a SourceTV demo as in-game voice chat, so you can review gameplay and comms together in the built-in demo player—staying in sync even when you change playback speed.
 
-Everything runs in your browser. Your demo and audio never leave your machine.
+**TF2 Demo External Comms Injector** turns an audio recording — or the audio from a video (e.g. Medal, OBS) — into Steam voice packets inside a `.dem` via `svc_VoiceData`. Everything runs in your browser; your demo and audio never leave your machine.
 
 **Features:**
 - Inject Discord/Mic (or any audio) into a `.dem` as `svc_VoiceData`
