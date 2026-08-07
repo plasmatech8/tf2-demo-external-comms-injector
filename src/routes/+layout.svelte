@@ -5,7 +5,6 @@
 	import {
 		META_DESCRIPTION,
 		OG_IMAGE_PATH,
-		SITE_NAME,
 		SITE_TITLE
 	} from '$lib/site';
 
@@ -23,7 +22,6 @@
 
 	<meta property="og:type" content="website" />
 	<meta property="og:url" content={canonicalUrl} />
-	<meta property="og:site_name" content={SITE_NAME} />
 	<meta property="og:title" content={SITE_TITLE} />
 	<meta property="og:description" content={META_DESCRIPTION} />
 	<meta property="og:image" content={ogImageUrl} />
