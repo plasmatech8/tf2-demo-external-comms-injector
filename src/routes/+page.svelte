@@ -461,7 +461,10 @@
 				External Comms Audio Injection Tool
 			</p>
 			<p class="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">
-				Injects an external audio recording into the demo as in-game voice&nbsp;chat.
+				Injects an external audio recording into the demo as in-game voice&nbsp;chat, so you can
+				review gameplay and comms together in the built-in demo player—staying in sync even when
+				you change playback speed. No more running the demo and a separate recording side by side
+				and constantly pausing to line them up.
 			</p>
 		</header>
 
