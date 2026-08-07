@@ -9,6 +9,6 @@ export const SITE_DESCRIPTION =
 export const META_DESCRIPTION =
 	'Inject external audio into a TF2 demo as in-game voice chat so gameplay and comms stay in sync in the built-in demo player—even when you change playback speed.';
 
-export const SITE_TITLE = `${SITE_NAME} — Sync external comms into demos`;
+export const SITE_TITLE = `${SITE_NAME} — ${SITE_TAGLINE}`;
 
 export const OG_IMAGE_PATH = '/og-image.svg';
