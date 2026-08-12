@@ -518,6 +518,7 @@
 					label="Audio / video"
 					prominent
 					accept="video/mp4,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/flac,audio/x-m4a,.mp3,.wav,.ogg,.webm,.flac,.m4a,.mp4"
+					helper="Multi-track recordings (separate voice chat from game audio) work best. A single mixed track will still work, but may include extra background noise."
 					file={mediaFile}
 					onchange={(f) => void setMediaFile(f)}
 				/>
