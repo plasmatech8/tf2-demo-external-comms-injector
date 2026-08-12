@@ -518,7 +518,7 @@
 					label="Audio / video"
 					prominent
 					accept="video/mp4,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/flac,audio/x-m4a,.mp3,.wav,.ogg,.webm,.flac,.m4a,.mp4"
-					helper="Voice chat–only audio (e.g. a Discord recording) is ideal. If game audio is included, separate voice tracks work best; a single mixed track will still work, but may include extra background noise."
+					helper="Voice chat–only audio (e.g. a Discord recording) is ideal. When game audio is in the file, multi-track audio or video—with separate voice and game tracks—works best; a single mixed track will still work, but may include extra background noise."
 					file={mediaFile}
 					onchange={(f) => void setMediaFile(f)}
 				/>
