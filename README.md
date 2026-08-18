@@ -9,6 +9,10 @@
 
 <p align="center"><b>Review TF2 demos with external comms synced in the built-in player</b></p>
 
+<p align="center">
+  <a href="https://tf2-demo-external-comms-injector.plasmatech8.workers.dev/"><b>Open the web app</b></a>
+</p>
+
 Injects an external audio recording into a SourceTV demo as in-game voice chat, so you can review gameplay and comms together in the built-in demo player—staying in sync even when you change playback speed.
 
 **TF2 Demo External Comms Injector** turns an audio recording — or the audio from a video (e.g. Medal, OBS) — into Steam voice packets inside a `.dem` via `svc_VoiceData`. Everything runs in your browser; your demo and audio never leave your machine.
@@ -42,6 +46,8 @@ Injects an external audio recording into a SourceTV demo as in-game voice chat, 
 | [`src/lib/wasm/`](src/lib/wasm/) | Prebuilt WASM package for the UI |
 
 ## Quick start (UI)
+
+Use the hosted app at [tf2-demo-external-comms-injector.plasmatech8.workers.dev](https://tf2-demo-external-comms-injector.plasmatech8.workers.dev/), or run it locally:
 
 ```sh
 npm install
