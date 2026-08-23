@@ -479,11 +479,15 @@ fn rewrite_demo_with_voice(
     start_tick: u32,
     replace_existing: bool,
 ) -> Result<(Vec<u8>, usize)> {
-    // Surgical rewrite: keep original packet bytes intact. Insert one voice-only
-    // Message packet per Steam Voice frame at its scheduled tick, immediately
-    // before the next original packet. Do not hang multiple frames on a gameplay
-    // packet (that bursts the TF2 jitter buffer) and do not re-encode
-    // PacketEntities (full re-encode makes TF2 refuse playdemo).
+    // Surgical rewrite: keep original packet bytes intact. For Message packets that
+    // need voice, copy the packet prefix + existing net-message bits and append
+    // VoiceData, without re-encoding PacketEntities (full re-encode makes TF2
+    // refuse playdemo).
+    //
+    // TF2's demo player does not treat a Message packet that contains only
+    // svc_VoiceData as a speaking frame (no indicator, no audio). Voice must ride
+    // on an existing gameplay dem_packet. Demos skip ticks, so several 20 ms
+    // frames may land on one host packet across a gap.
     let demo = Demo::new(file);
     let mut stream = demo.get_stream();
     let header = Header::read(&mut stream)?;
@@ -493,14 +497,12 @@ fn rewrite_demo_with_voice(
     }
     let mut packets = RawPacketStream::new(stream);
 
-    let mut out_buffer: Vec<u8> = Vec::with_capacity(file.len() + schedule.len() * 160);
+    let mut out_buffer: Vec<u8> = Vec::with_capacity(file.len() + schedule.len() * 128);
     out_buffer.extend_from_slice(&file[..header_end_bits / 8]);
 
     let mut handler = DemoHandler::parse_all_with_analyser(NullHandler);
     let mut encode_handler = DemoHandler::parse_all_with_analyser(NullHandler);
     let mut sched_idx = 0usize;
-    let mut inserted_packets = 0u32;
-    let mut last_meta: Option<[u8; MESSAGE_META_LEN]> = None;
 
     let end_tick = schedule.last().map(|(t, _)| *t).unwrap_or(start_tick);
     let mut has_stop = false;
@@ -521,15 +523,24 @@ fn rewrite_demo_with_voice(
         }
         let packet_start = packet_start_bits / 8;
         let packet_end = packet_end_bits / 8;
-        let raw_packet = &file[packet_start..packet_end];
 
         last_tick = packet.tick();
         if packet.packet_type() == PacketType::Stop {
             has_stop = true;
         }
 
-        if let Some(meta) = message_packet_meta(raw_packet) {
-            last_meta = Some(meta);
+        // Collect voice frames due by this Message packet's tick.
+        // Hang each pending frame on the first packet whose tick is >= the frame's
+        // scheduled tick (may batch several frames onto one packet across a gap).
+        let mut frames_for_packet: Vec<Vec<u8>> = Vec::new();
+        let mut strip_existing = false;
+        if let Packet::Message(msg) = &packet {
+            let pkt_tick: u32 = msg.tick.into();
+            strip_existing = replace_existing && pkt_tick >= start_tick && pkt_tick <= end_tick;
+            while sched_idx < schedule.len() && schedule[sched_idx].0 <= pkt_tick {
+                frames_for_packet.push(schedule[sched_idx].1.clone());
+                sched_idx += 1;
+            }
         }
 
         let needs_voice_init_patch = match &packet {
@@ -547,37 +558,19 @@ fn rewrite_demo_with_voice(
             );
         }
 
-        // Insert due frames before this packet (never inside the signon region).
-        let pkt_tick: u32 = packet.tick().into();
-        if packet.packet_type() != PacketType::Signon {
-            if let Some(meta) = last_meta.as_ref() {
-                while sched_idx < schedule.len() && schedule[sched_idx].0 <= pkt_tick {
-                    let (tick, frame) = &schedule[sched_idx];
-                    let voice_pkt =
-                        build_voice_only_message_packet(*tick, meta, frame, client_index)?;
-                    out_buffer.extend_from_slice(&voice_pkt);
-                    sched_idx += 1;
-                    inserted_packets += 1;
-                }
-            }
-        }
-
-        let strip_existing = matches!(packet.packet_type(), PacketType::Message)
-            && replace_existing
-            && pkt_tick >= start_tick
-            && pkt_tick <= end_tick;
-
-        if strip_existing {
+        if matches!(packet.packet_type(), PacketType::Message)
+            && (!frames_for_packet.is_empty() || strip_existing)
+        {
             let rewritten = rewrite_message_packet_append_voice(
-                raw_packet,
-                &[],
+                &file[packet_start..packet_end],
+                &frames_for_packet,
                 client_index,
-                true,
+                strip_existing,
                 &encode_handler.state_handler,
             )?;
             out_buffer.extend_from_slice(&rewritten);
         } else {
-            out_buffer.extend_from_slice(raw_packet);
+            out_buffer.extend_from_slice(&file[packet_start..packet_end]);
         }
 
         // Keep parser state in sync for subsequent packets (sendtables, etc.).
@@ -605,54 +598,12 @@ fn rewrite_demo_with_voice(
         out_buffer.extend_from_slice(&encoded);
     }
 
-    if inserted_packets > 0 {
-        bump_header_frames(&mut out_buffer, inserted_packets)?;
-    }
-
     // Original header.signon is preserved (we never rewrite the signon region).
     let _ = header;
     Ok((out_buffer, sched_idx))
 }
 
 const MESSAGE_PREFIX: usize = 1 + 4 + 84; // type + tick + MessagePacketMeta
-const MESSAGE_META_LEN: usize = 84;
-const MESSAGE_META_OFF: usize = 1 + 4;
-
-fn message_packet_meta(raw_packet: &[u8]) -> Option<[u8; MESSAGE_META_LEN]> {
-    if raw_packet.len() < MESSAGE_PREFIX {
-        return None;
-    }
-    let ty = raw_packet[0];
-    if ty != PacketType::Message as u8 && ty != PacketType::Signon as u8 {
-        return None;
-    }
-    let mut meta = [0u8; MESSAGE_META_LEN];
-    meta.copy_from_slice(&raw_packet[MESSAGE_META_OFF..MESSAGE_META_OFF + MESSAGE_META_LEN]);
-    Some(meta)
-}
-
-/// Build a standalone `dem_packet` containing a single `svc_VoiceData` message.
-fn build_voice_only_message_packet(
-    tick: u32,
-    meta: &[u8; MESSAGE_META_LEN],
-    frame: &[u8],
-    client_index: u8,
-) -> Result<Vec<u8>> {
-    let mut new_data: Vec<u8> = Vec::with_capacity(frame.len() + 8);
-    {
-        let mut writer = bitbuffer::BitWriteStream::new(&mut new_data, LittleEndian);
-        write_voice_data_message(&mut writer, frame, client_index)?;
-        writer.align();
-    }
-
-    let mut out = Vec::with_capacity(MESSAGE_PREFIX + 4 + new_data.len());
-    out.push(PacketType::Message as u8);
-    out.extend_from_slice(&(tick as i32).to_le_bytes());
-    out.extend_from_slice(meta);
-    out.extend_from_slice(&(new_data.len() as u32).to_le_bytes());
-    out.extend_from_slice(&new_data);
-    Ok(out)
-}
 
 fn write_voice_data_message(
     writer: &mut bitbuffer::BitWriteStream<LittleEndian>,
@@ -669,35 +620,6 @@ fn write_voice_data_message(
         data,
     }
     .write(writer)?;
-    Ok(())
-}
-
-fn bump_header_frames(buf: &mut [u8], extra: u32) -> Result<()> {
-    if extra == 0 {
-        return Ok(());
-    }
-    let demo = Demo::new(buf);
-    let mut stream = demo.get_stream();
-    let mut header = Header::read(&mut stream)?;
-    let header_end_bits = stream.pos();
-    if header_end_bits % 8 != 0 {
-        bail!("demo header is not byte-aligned");
-    }
-    header.frames = header.frames.saturating_add(extra);
-    let mut encoded = Vec::new();
-    {
-        let mut out_stream = bitbuffer::BitWriteStream::new(&mut encoded, LittleEndian);
-        header.write(&mut out_stream)?;
-        out_stream.align();
-    }
-    if encoded.len() != header_end_bits / 8 {
-        bail!(
-            "header size changed when bumping frames ({} vs {})",
-            encoded.len(),
-            header_end_bits / 8
-        );
-    }
-    buf[..encoded.len()].copy_from_slice(&encoded);
     Ok(())
 }
 
@@ -1012,8 +934,8 @@ mod voice_insert_tests {
     }
 
     #[test]
-    fn inserts_one_voice_packet_per_frame_across_tick_gaps() {
-        // Host packets at 5 and 15; frames 6..=9 would previously batch onto tick 15.
+    fn hangs_due_frames_on_next_host_packet_across_tick_gaps() {
+        // Host packets at 5 and 15; frames 6..=9 and 15 hang on tick 15, 16 on 30.
         let demo = stub_demo(&[5, 15, 30]);
         let schedule: Vec<(u32, Vec<u8>)> = [6u32, 7, 8, 9, 15, 16]
             .into_iter()
@@ -1024,9 +946,9 @@ mod voice_insert_tests {
         assert_eq!(placed, 6);
 
         let (frames, voice_ticks, max_voice) = voice_layout(&out);
-        assert_eq!(voice_ticks, vec![6, 7, 8, 9, 15, 16]);
-        assert_eq!(max_voice, 1, "each voice frame must be its own dem_packet");
-        assert_eq!(frames, 3 + 6);
+        assert_eq!(voice_ticks, vec![15, 15, 15, 15, 15, 30]);
+        assert_eq!(max_voice, 5);
+        assert_eq!(frames, 3);
     }
 
     #[test]

@@ -82,7 +82,7 @@ Modern TF2 uses `sv_voicecodec steam`. Voice in demos is carried as `svc_VoiceDa
 steamid64 | SampleRate(0x0B) | OpusPlc(0x06, len/seq/opus…) | CRC32
 ```
 
-This tool encodes your audio with libopus, wraps it in that format, and inserts one voice-only `dem_packet` per 20 ms frame at the scheduled tick (immediately before the next original packet). That avoids bursting several Steam Voice messages onto one gameplay packet, which desyncs TF2’s voice jitter buffer.
+This tool encodes your audio with libopus, wraps it in that format, and splices messages into existing `dem_packet` frames at ticks corresponding to the resolved demo `--offset` (auto round-start by default) and frame duration (~20 ms). TF2 ignores standalone voice-only packets (no speaking indicator), so frames ride on gameplay packets.
 
 Voice is attributed to an existing player slot (client index + steamid) so the demo player has a valid speaker identity.
 
@@ -131,7 +131,7 @@ Native builds keep using libopus (`native-opus` feature). Browser builds use `--
 
 - **In-game playback** still needs a human with TF2 to confirm audible output, spatialization, and UI “speaking” indicators.
 - SourceTV must have recorded with a `steam` voice init (this sample does). Older CELT/Speex demos need different codecs.
-- Very large injections near demo EOF can fail if no later packet (including `dem_stop`) exists to place voice-only frames before — use an earlier `--offset`.
+- Very large injections near demo EOF can fail if no later packets exist to hang frames on — use an earlier `--offset`.
 - Alternate approaches (client mods, external A/V sync hooks) were intentionally avoided for security/complexity reasons; see `docs/research.md`.
 - Browser WASM loads the whole demo into memory (tens of MB is fine; multi-hundred-MB demos may stress tab memory). Cloudflare Worker hosting of the injector itself is a separate follow-up (request body / CPU limits).
 
