@@ -181,19 +181,10 @@ impl SteamVoiceEncoder {
         }
     }
 
-    /// Encode a single PCM frame into one complete Steam Voice packet (with CRC).
-    pub fn encode_frame(&mut self, pcm: &[i16]) -> Result<Vec<u8>, SteamVoiceError> {
-        let opus = self.encode_opus(pcm)?;
-        if opus.len() > u16::MAX as usize {
-            return Err(SteamVoiceError::FrameTooLarge(opus.len()));
+    fn wrap_steam_packet(&self, plc: &[u8]) -> Result<Vec<u8>, SteamVoiceError> {
+        if plc.len() > u16::MAX as usize {
+            return Err(SteamVoiceError::FrameTooLarge(plc.len()));
         }
-
-        let mut plc = Vec::with_capacity(4 + opus.len());
-        plc.extend_from_slice(&(opus.len() as u16).to_le_bytes());
-        plc.extend_from_slice(&self.seq.to_le_bytes());
-        plc.extend_from_slice(&opus);
-        self.seq = self.seq.wrapping_add(1);
-
         let mut packet = Vec::with_capacity(8 + 3 + 3 + plc.len() + 4);
         packet.extend_from_slice(&self.steam_id.to_le_bytes());
         // SampleRate payload
@@ -202,13 +193,53 @@ impl SteamVoiceEncoder {
         // OpusPlc payload
         packet.push(0x06);
         packet.extend_from_slice(&(plc.len() as u16).to_le_bytes());
-        packet.extend_from_slice(&plc);
+        packet.extend_from_slice(plc);
         let crc = steam_crc32(&packet);
         packet.extend_from_slice(&crc.to_le_bytes());
         Ok(packet)
     }
 
+    fn push_reset_segment(&mut self, plc: &mut Vec<u8>) {
+        plc.extend_from_slice(&0xFFFFu16.to_le_bytes());
+        plc.extend_from_slice(&self.seq.to_le_bytes());
+        self.seq = self.seq.wrapping_add(1);
+    }
+
+    fn push_opus_segment(&mut self, plc: &mut Vec<u8>, opus: &[u8]) -> Result<(), SteamVoiceError> {
+        if opus.len() > u16::MAX as usize {
+            return Err(SteamVoiceError::FrameTooLarge(opus.len()));
+        }
+        plc.extend_from_slice(&(opus.len() as u16).to_le_bytes());
+        plc.extend_from_slice(&self.seq.to_le_bytes());
+        plc.extend_from_slice(opus);
+        self.seq = self.seq.wrapping_add(1);
+        Ok(())
+    }
+
+    /// Encode a single PCM frame into one complete Steam Voice packet (with CRC).
+    pub fn encode_frame(&mut self, pcm: &[i16]) -> Result<Vec<u8>, SteamVoiceError> {
+        self.encode_frame_inner(pcm, false)
+    }
+
+    fn encode_frame_inner(
+        &mut self,
+        pcm: &[i16],
+        reset_decoder: bool,
+    ) -> Result<Vec<u8>, SteamVoiceError> {
+        let opus = self.encode_opus(pcm)?;
+        let mut plc = Vec::with_capacity(8 + opus.len());
+        if reset_decoder {
+            // `opus_len == 0xFFFF` resets Steam / TF2 decoder state (talk-spurt start).
+            self.push_reset_segment(&mut plc);
+        }
+        self.push_opus_segment(&mut plc, &opus)?;
+        self.wrap_steam_packet(&plc)
+    }
+
     /// Slice PCM into frames (zero-pad the last), encode each to a Steam Voice packet.
+    ///
+    /// The first datagram includes an Opus PLC reset (`0xFFFF`) so TF2 starts the
+    /// decoder cleanly instead of inheriting leftover PLC state.
     pub fn encode_pcm(&mut self, pcm: &[i16]) -> Result<Vec<Vec<u8>>, SteamVoiceError> {
         let mut out = Vec::new();
         let mut offset = 0;
@@ -216,7 +247,8 @@ impl SteamVoiceEncoder {
             let end = (offset + self.frame_samples).min(pcm.len());
             let mut frame = vec![0i16; self.frame_samples];
             frame[..end - offset].copy_from_slice(&pcm[offset..end]);
-            out.push(self.encode_frame(&frame)?);
+            let reset = out.is_empty();
+            out.push(self.encode_frame_inner(&frame, reset)?);
             offset = end;
         }
         Ok(out)
@@ -226,6 +258,21 @@ impl SteamVoiceEncoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_encode_pcm_packet_starts_with_plc_reset() {
+        let mut enc = SteamVoiceEncoder::new(76561198081400087, DEFAULT_SAMPLE_RATE).unwrap();
+        let packets = enc.encode_pcm(&vec![1000i16; FRAME_SAMPLES * 2]).unwrap();
+        assert_eq!(packets.len(), 2);
+        for pkt in &packets {
+            let (body, crc_bytes) = pkt.split_at(pkt.len() - 4);
+            let crc = u32::from_le_bytes(crc_bytes.try_into().unwrap());
+            assert_eq!(crc, steam_crc32(body));
+        }
+        // steamid(8) + 0x0B + rate(2) + 0x06 + len(2) = 14
+        assert_eq!(&packets[0][14..16], &[0xFF, 0xFF]);
+        assert_ne!(&packets[1][14..16], &[0xFF, 0xFF]);
+    }
 
     #[test]
     fn crc_matches_known_vector() {

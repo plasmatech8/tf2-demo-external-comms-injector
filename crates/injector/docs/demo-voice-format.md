@@ -43,3 +43,5 @@ At 66.67 tick/s and 20 ms Opus frames → ~1.333 ticks/frame. This tool places f
 ```
 start_tick + round(i * tickrate * frame_samples / sample_rate)
 ```
+
+Each frame is written as its own voice-only `dem_packet` (one `svc_VoiceData`) immediately before the next original packet whose tick is `>=` the scheduled tick. Frames are not batched onto a gameplay packet. The first Steam Voice datagram starts with an Opus PLC reset (`frame_len = 0xFFFF`).
