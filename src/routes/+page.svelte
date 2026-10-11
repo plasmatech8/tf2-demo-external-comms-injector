@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
+	import { resolve } from '$app/paths';
 	import { fade, slide } from 'svelte/transition';
 	import FileField from '$lib/components/FileField.svelte';
 	import Hint from '$lib/components/Hint.svelte';
@@ -399,8 +400,7 @@
 			// Let the bar paint at 100% briefly before generating clears.
 			await new Promise((r) => setTimeout(r, 280));
 		} catch (e) {
-			const isAbort =
-				(e instanceof DOMException || e instanceof Error) && e.name === 'AbortError';
+			const isAbort = (e instanceof DOMException || e instanceof Error) && e.name === 'AbortError';
 			if (isAbort || !stillCurrent()) return;
 			successMessage = null;
 			if (e instanceof Error && e.message) {
@@ -506,7 +506,7 @@
 								{playersError}
 							</p>
 						{:else if players.length > 0}
-							<SpeakerSelect id="speaker" players={players} bind:value={selectedPlayerId} />
+							<SpeakerSelect id="speaker" {players} bind:value={selectedPlayerId} />
 						{/if}
 					</div>
 				{/if}
@@ -518,12 +518,20 @@
 					label="Audio / video"
 					prominent
 					accept="video/mp4,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/flac,audio/x-m4a,.mp3,.wav,.ogg,.webm,.flac,.m4a,.mp4"
-					helper={mediaFile
-						? undefined
-						: 'Voice chat–only audio, such as a Discord recording, is ideal. When game audio is included in the video or audio file, multi-track recordings with separate voice and game tracks work better; a single mixed track will still work, but may include extra background noise.'}
 					file={mediaFile}
 					onchange={(f) => void setMediaFile(f)}
 				/>
+				{#if !mediaFile}
+					<p class="text-xs leading-relaxed text-[var(--color-muted)]">
+						Full-match recordings work best, ideally with separate Discord/mic tracks.
+						<a
+							href={resolve('/recording-help')}
+							class="rounded text-[var(--color-fg)] underline decoration-[var(--color-border-strong)] underline-offset-4 hover:text-[var(--color-fg-strong)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--color-accent)]"
+						>
+							Recording help <span aria-hidden="true">→</span>
+						</a>
+					</p>
+				{/if}
 
 				{#if mediaFile}
 					<div
@@ -535,9 +543,7 @@
 								<label for="media-game-start" class="text-sm font-medium text-[var(--color-muted)]">
 									Game start (seconds)
 								</label>
-								<Hint
-									text="Seconds into the recording until GO / end of the countdown. Earlier audio is skipped."
-								/>
+								<Hint text="Enter how many seconds into the recording the first round starts." />
 							</div>
 							<input
 								id="media-game-start"

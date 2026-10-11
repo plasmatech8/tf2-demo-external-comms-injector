@@ -2,34 +2,32 @@
 	import './layout.css';
 	import { page } from '$app/state';
 	import favicon from '$lib/assets/favicon.svg';
-	import {
-		META_DESCRIPTION,
-		OG_IMAGE_PATH,
-		SITE_TITLE
-	} from '$lib/site';
+	import { META_DESCRIPTION, OG_IMAGE_PATH, SITE_TITLE } from '$lib/site';
 
 	let { children } = $props();
 
 	const canonicalUrl = $derived(`${page.url.origin}${page.url.pathname}`);
 	const ogImageUrl = $derived(`${page.url.origin}${OG_IMAGE_PATH}`);
+	const pageTitle = $derived(page.data.title ?? SITE_TITLE);
+	const pageDescription = $derived(page.data.description ?? META_DESCRIPTION);
 </script>
 
 <svelte:head>
 	<link rel="icon" href={favicon} />
-	<title>{SITE_TITLE}</title>
-	<meta name="description" content={META_DESCRIPTION} />
+	<title>{pageTitle}</title>
+	<meta name="description" content={pageDescription} />
 	<link rel="canonical" href={canonicalUrl} />
 
 	<meta property="og:type" content="website" />
 	<meta property="og:url" content={canonicalUrl} />
-	<meta property="og:title" content={SITE_TITLE} />
-	<meta property="og:description" content={META_DESCRIPTION} />
+	<meta property="og:title" content={pageTitle} />
+	<meta property="og:description" content={pageDescription} />
 	<meta property="og:image" content={ogImageUrl} />
 	<meta property="og:locale" content="en_US" />
 
 	<meta name="twitter:card" content="summary" />
-	<meta name="twitter:title" content={SITE_TITLE} />
-	<meta name="twitter:description" content={META_DESCRIPTION} />
+	<meta name="twitter:title" content={pageTitle} />
+	<meta name="twitter:description" content={pageDescription} />
 	<meta name="twitter:image" content={ogImageUrl} />
 
 	<link rel="preconnect" href="https://fonts.googleapis.com" />
