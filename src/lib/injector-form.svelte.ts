@@ -3,33 +3,51 @@ import type { DemoPlayer } from '$lib/demo/players';
 import type { MediaInspection } from '$lib/media/tracks';
 
 /** Injector form fields that should survive in-app navigation (e.g. Recording help). */
-export class InjectorForm {
-	demoFile = $state<File | null>(null);
-	mediaFile = $state<File | null>(null);
+export type InjectorForm = {
+	demoFile: File | null;
+	mediaFile: File | null;
 	/** Seconds into the media until first round start. Defaults to 5. */
-	mediaGameStart = $state<number | null>(5);
+	mediaGameStart: number | null;
 	/** String draft for the game-start field so typing isn't rewritten by toFixed. */
-	gameStartDraft = $state('5.0');
-	selectedPlayerId = $state('');
-	selectedSources = $state<string[]>([]);
-	successMessage = $state<string | null>(null);
-	errorMessage = $state<string | null>(null);
-	players = $state<DemoPlayer[]>([]);
-	playersLoading = $state(false);
-	playersError = $state<string | null>(null);
-	mediaInfo = $state<MediaInspection | null>(null);
-	mediaLoading = $state(false);
-	mediaError = $state<string | null>(null);
+	gameStartDraft: string;
+	selectedPlayerId: string;
+	selectedSources: string[];
+	successMessage: string | null;
+	errorMessage: string | null;
+	players: DemoPlayer[];
+	playersLoading: boolean;
+	playersError: string | null;
+	mediaInfo: MediaInspection | null;
+	mediaLoading: boolean;
+	mediaError: string | null;
 	/** Bumped to ignore stale async demo completions. */
-	demoLoadGen = $state(0);
+	demoLoadGen: number;
 	/** Bumped to ignore stale async media completions. */
-	mediaLoadGen = $state(0);
+	mediaLoadGen: number;
 	/** True after the injector page has painted once — skip the fade on return. */
-	injectorVisited = $state(false);
-}
+	injectorVisited: boolean;
+};
 
 export function createInjectorForm(): InjectorForm {
-	return new InjectorForm();
+	return $state({
+		demoFile: null,
+		mediaFile: null,
+		mediaGameStart: 5,
+		gameStartDraft: '5.0',
+		selectedPlayerId: '',
+		selectedSources: [],
+		successMessage: null,
+		errorMessage: null,
+		players: [],
+		playersLoading: false,
+		playersError: null,
+		mediaInfo: null,
+		mediaLoading: false,
+		mediaError: null,
+		demoLoadGen: 0,
+		mediaLoadGen: 0,
+		injectorVisited: false
+	});
 }
 
 export const [getInjectorForm, setInjectorForm] = createContext<InjectorForm>();
