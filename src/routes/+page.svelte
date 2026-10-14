@@ -7,62 +7,80 @@
 	import LoadingStatus from '$lib/components/LoadingStatus.svelte';
 	import ProgressBar from '$lib/components/ProgressBar.svelte';
 	import SpeakerSelect from '$lib/components/SpeakerSelect.svelte';
-	import { listDemoPlayers } from '$lib/demo/players';
+	import { listDemoPlayers, type DemoPlayer } from '$lib/demo/players';
 	import { previewAroundGameStart, type PreviewHandle } from '$lib/media/preview';
 	import { previewMediaSource, primeAudioContext } from '$lib/media/source-preview';
 	import { inspectMedia, type MediaInspection, type MediaSource } from '$lib/media/tracks';
-	import { getInjectorForm } from '$lib/injector-form.svelte';
 	import { SITE_DESCRIPTION } from '$lib/site';
 
-	const form = getInjectorForm();
-
+	let demoFile = $state<File | null>(null);
+	let mediaFile = $state<File | null>(null);
+	/** Seconds into the media until game start / GO. Defaults to 5. */
+	let mediaGameStart = $state<number | null>(5);
+	/** String draft for the game-start field so typing isn't rewritten by toFixed. */
+	let gameStartDraft = $state('5.0');
+	let selectedPlayerId = $state('');
+	let selectedSources = $state<string[]>([]);
 	let generating = $state(false);
 	/** 0–100 while generating; cleared when idle. */
 	let generateProgress = $state(0);
 	let generateStatus = $state('');
-	let ready = $state(form.injectorVisited);
+	let successMessage = $state<string | null>(null);
+	let errorMessage = $state<string | null>(null);
+	let ready = $state(false);
+
+	let players = $state<DemoPlayer[]>([]);
+	let playersLoading = $state(false);
+	let playersError = $state<string | null>(null);
+
+	let mediaInfo = $state<MediaInspection | null>(null);
+	let mediaLoading = $state(false);
+	let mediaError = $state<string | null>(null);
 
 	let previewing = $state(false);
 	let previewHandle = $state<PreviewHandle | null>(null);
 	let sourcePreviewId = $state<string | null>(null);
 	let sourcePreviewLoadingId = $state<string | null>(null);
 	let sourcePreviewHandle = $state<PreviewHandle | null>(null);
+	/** Bumped to ignore stale async demo/media/preview completions. */
+	let demoLoadGen = 0;
+	let mediaLoadGen = 0;
 	let sourcePreviewGen = 0;
 	let gameStartPreviewGen = 0;
 	/** Cancels in-flight prepare when demo/media is swapped or Generate restarts. */
 	let generateAbort: AbortController | null = null;
 
 	const selectedPlayer = $derived(
-		form.players.find((p) => String(p.userId) === form.selectedPlayerId) ?? null
+		players.find((p) => String(p.userId) === selectedPlayerId) ?? null
 	);
 
 	const gameStartValid = $derived(
-		form.mediaGameStart !== null && Number.isFinite(form.mediaGameStart) && form.mediaGameStart >= 0
+		mediaGameStart !== null && Number.isFinite(mediaGameStart) && mediaGameStart >= 0
 	);
 
-	const showGameStartNeeded = $derived(!!form.mediaFile && !gameStartValid);
+	const showGameStartNeeded = $derived(!!mediaFile && !gameStartValid);
 
 	const canGenerate = $derived(
-		!!form.demoFile &&
-			!!form.mediaFile &&
+		!!demoFile &&
+			!!mediaFile &&
 			!!selectedPlayer &&
-			form.selectedSources.length > 0 &&
+			selectedSources.length > 0 &&
 			gameStartValid &&
 			!generating &&
-			!form.playersLoading &&
-			!form.mediaLoading
+			!playersLoading &&
+			!mediaLoading
 	);
 
+	const hasUpload = $derived(!!demoFile || !!mediaFile);
+
+	/** Soft-blocks tab close / refresh / leaving the site while files are selected. */
+	function onBeforeUnload(event: BeforeUnloadEvent) {
+		event.preventDefault();
+		event.returnValue = '';
+	}
+
 	onMount(() => {
-		if (form.injectorVisited) {
-			ready = true;
-			return () => {
-				previewHandle?.stop();
-				sourcePreviewHandle?.stop();
-			};
-		}
 		const id = requestAnimationFrame(() => {
-			form.injectorVisited = true;
 			ready = true;
 		});
 		return () => {
@@ -88,7 +106,7 @@
 	}
 
 	async function onSourcePreview(source: MediaSource) {
-		if (!form.mediaFile) return;
+		if (!mediaFile) return;
 		if (sourcePreviewId === source.id || sourcePreviewLoadingId === source.id) {
 			stopSourcePreview();
 			return;
@@ -97,7 +115,7 @@
 		stopSourcePreview();
 		const token = (sourcePreviewGen += 1);
 		sourcePreviewLoadingId = source.id;
-		const requestFile = form.mediaFile;
+		const requestFile = mediaFile;
 		const primed = primeAudioContext();
 		try {
 			const handle = await previewMediaSource(
@@ -111,7 +129,7 @@
 				},
 				primed
 			);
-			if (token !== sourcePreviewGen || form.mediaFile !== requestFile) {
+			if (token !== sourcePreviewGen || mediaFile !== requestFile) {
 				handle.stop();
 				if (primed && primed.state !== 'closed') void primed.close().catch(() => undefined);
 				return;
@@ -119,13 +137,13 @@
 			sourcePreviewHandle = handle;
 			sourcePreviewId = source.id;
 			sourcePreviewLoadingId = null;
-			form.errorMessage = null;
+			errorMessage = null;
 		} catch (e) {
 			if (token !== sourcePreviewGen) return;
 			sourcePreviewLoadingId = null;
 			sourcePreviewId = null;
 			if (primed && primed.state !== 'closed') void primed.close().catch(() => undefined);
-			form.errorMessage = e instanceof Error ? e.message : 'Track preview failed.';
+			errorMessage = e instanceof Error ? e.message : 'Track preview failed.';
 		}
 	}
 
@@ -141,45 +159,45 @@
 
 	function syncMediaGameStartFromDraft(draft: string) {
 		if (draft === '' || draft === '.' || !GAME_START_DRAFT_RE.test(draft)) {
-			form.mediaGameStart = null;
+			mediaGameStart = null;
 			return;
 		}
 		const v = Number(draft);
-		form.mediaGameStart = Number.isFinite(v) && v >= 0 ? v : null;
+		mediaGameStart = Number.isFinite(v) && v >= 0 ? v : null;
 	}
 
 	function onGameStartInput(e: Event) {
 		const el = e.currentTarget as HTMLInputElement;
 		const draft = sanitizeGameStartDraft(el.value);
-		form.gameStartDraft = draft;
+		gameStartDraft = draft;
 		// Force DOM sync when Svelte skips the update (draft unchanged after sanitize).
 		if (el.value !== draft) el.value = draft;
 		syncMediaGameStartFromDraft(draft);
 	}
 
 	function onGameStartBlur() {
-		const draft = form.gameStartDraft.trim();
+		const draft = gameStartDraft.trim();
 		if (draft === '' || draft === '.' || !GAME_START_DRAFT_RE.test(draft)) {
-			form.mediaGameStart = null;
+			mediaGameStart = null;
 			return;
 		}
 		const v = Number(draft);
 		if (!Number.isFinite(v) || v < 0) {
-			form.mediaGameStart = null;
+			mediaGameStart = null;
 			return;
 		}
 		const rounded = Math.round(v * 10) / 10;
-		form.mediaGameStart = rounded;
-		form.gameStartDraft = rounded.toFixed(1);
+		mediaGameStart = rounded;
+		gameStartDraft = rounded.toFixed(1);
 	}
 
 	async function onPreview() {
-		if (!form.mediaFile || !gameStartValid || form.mediaGameStart === null) return;
+		if (!mediaFile || !gameStartValid || mediaGameStart === null) return;
 		stopSourcePreview();
 		stopPreview();
 		const token = (gameStartPreviewGen += 1);
-		const requestFile = form.mediaFile;
-		const requestStart = form.mediaGameStart;
+		const requestFile = mediaFile;
+		const requestStart = mediaGameStart;
 		previewing = true;
 		try {
 			const handle = await previewAroundGameStart(requestFile, requestStart, () => {
@@ -189,97 +207,97 @@
 			});
 			if (
 				token !== gameStartPreviewGen ||
-				form.mediaFile !== requestFile ||
-				form.mediaGameStart !== requestStart
+				mediaFile !== requestFile ||
+				mediaGameStart !== requestStart
 			) {
 				handle.stop();
 				return;
 			}
 			previewHandle = handle;
-			form.errorMessage = null;
+			errorMessage = null;
 		} catch (e) {
 			if (token !== gameStartPreviewGen) return;
 			previewing = false;
-			form.errorMessage = e instanceof Error ? e.message : 'Preview failed.';
+			errorMessage = e instanceof Error ? e.message : 'Preview failed.';
 		}
 	}
 
 	async function setDemoFile(file: File | null) {
-		const token = (form.demoLoadGen += 1);
+		const token = (demoLoadGen += 1);
 		generateAbort?.abort();
 		generateAbort = null;
-		form.demoFile = file;
-		form.players = [];
-		form.selectedPlayerId = '';
-		form.playersError = null;
-		form.successMessage = null;
-		form.errorMessage = null;
+		demoFile = file;
+		players = [];
+		selectedPlayerId = '';
+		playersError = null;
+		successMessage = null;
+		errorMessage = null;
 
 		if (!file) {
-			form.playersLoading = false;
+			playersLoading = false;
 			return;
 		}
 
-		form.playersLoading = true;
+		playersLoading = true;
 		try {
 			const nextPlayers = await listDemoPlayers(file);
-			if (token !== form.demoLoadGen || form.demoFile !== file) return;
-			form.players = nextPlayers;
+			if (token !== demoLoadGen || demoFile !== file) return;
+			players = nextPlayers;
 			if (nextPlayers.length === 0) {
-				form.playersError = 'No players found in this demo file.';
+				playersError = 'No players found in this demo file.';
 			} else {
-				form.selectedPlayerId = String(nextPlayers[0].userId);
+				selectedPlayerId = String(nextPlayers[0].userId);
 			}
 		} catch (e) {
-			if (token !== form.demoLoadGen || form.demoFile !== file) return;
-			form.playersError = e instanceof Error ? e.message : 'Failed to read players from demo file.';
+			if (token !== demoLoadGen || demoFile !== file) return;
+			playersError = e instanceof Error ? e.message : 'Failed to read players from demo file.';
 		} finally {
-			if (token === form.demoLoadGen) form.playersLoading = false;
+			if (token === demoLoadGen) playersLoading = false;
 		}
 	}
 
 	async function setMediaFile(file: File | null) {
-		const token = (form.mediaLoadGen += 1);
+		const token = (mediaLoadGen += 1);
 		stopPreview();
 		stopSourcePreview();
 		generateAbort?.abort();
 		generateAbort = null;
-		form.mediaFile = file;
-		form.mediaInfo = null;
-		form.selectedSources = [];
-		form.mediaError = null;
-		form.mediaGameStart = file ? 5 : null;
-		form.gameStartDraft = file ? '5.0' : '';
-		form.successMessage = null;
-		form.errorMessage = null;
+		mediaFile = file;
+		mediaInfo = null;
+		selectedSources = [];
+		mediaError = null;
+		mediaGameStart = file ? 5 : null;
+		gameStartDraft = file ? '5.0' : '';
+		successMessage = null;
+		errorMessage = null;
 
 		if (!file) {
-			form.mediaLoading = false;
+			mediaLoading = false;
 			return;
 		}
 
-		form.mediaLoading = true;
+		mediaLoading = true;
 		try {
 			const info = await inspectMedia(file);
-			if (token !== form.mediaLoadGen || form.mediaFile !== file) return;
-			form.mediaInfo = info;
-			form.selectedSources = info.sources.filter((s) => s.defaultSelected).map((s) => s.id);
+			if (token !== mediaLoadGen || mediaFile !== file) return;
+			mediaInfo = info;
+			selectedSources = info.sources.filter((s) => s.defaultSelected).map((s) => s.id);
 			if (info.sources.length === 0) {
-				form.mediaError = info.summary || 'No audio sources found.';
+				mediaError = info.summary || 'No audio sources found.';
 			}
 		} catch (e) {
-			if (token !== form.mediaLoadGen || form.mediaFile !== file) return;
-			form.mediaError = e instanceof Error ? e.message : 'Failed to inspect media file.';
+			if (token !== mediaLoadGen || mediaFile !== file) return;
+			mediaError = e instanceof Error ? e.message : 'Failed to inspect media file.';
 		} finally {
-			if (token === form.mediaLoadGen) form.mediaLoading = false;
+			if (token === mediaLoadGen) mediaLoading = false;
 		}
 	}
 
 	function toggleSource(id: string) {
-		if (form.selectedSources.includes(id)) {
-			form.selectedSources = form.selectedSources.filter((t) => t !== id);
+		if (selectedSources.includes(id)) {
+			selectedSources = selectedSources.filter((t) => t !== id);
 		} else {
-			form.selectedSources = [...form.selectedSources, id];
+			selectedSources = [...selectedSources, id];
 		}
 	}
 
@@ -301,29 +319,28 @@
 	}
 
 	async function onGenerate() {
-		if (!canGenerate || !form.demoFile || !form.mediaFile || !selectedPlayer || !gameStartValid)
-			return;
-		if (form.mediaGameStart === null) return;
+		if (!canGenerate || !demoFile || !mediaFile || !selectedPlayer || !gameStartValid) return;
+		if (mediaGameStart === null) return;
 
 		generateAbort?.abort();
 		generateAbort = new AbortController();
 		const signal = generateAbort.signal;
 
 		generating = true;
-		form.successMessage = null;
-		form.errorMessage = null;
+		successMessage = null;
+		errorMessage = null;
 		setGenerateProgress('Loading modules…', 2);
 		stopPreview();
 		stopSourcePreview();
 
-		const outName = downloadName(form.demoFile.name);
-		const requestDemo = form.demoFile;
-		const requestMedia = form.mediaFile;
+		const outName = downloadName(demoFile.name);
+		const requestDemo = demoFile;
+		const requestMedia = mediaFile;
 		const requestPlayer = selectedPlayer;
-		const requestStart = form.mediaGameStart;
-		const requestSources = [...form.selectedSources];
-		const sourcesSnapshot = form.mediaInfo?.sources ?? [];
-		const stillCurrent = () => form.demoFile === requestDemo && form.mediaFile === requestMedia;
+		const requestStart = mediaGameStart;
+		const requestSources = [...selectedSources];
+		const sourcesSnapshot = mediaInfo?.sources ?? [];
+		const stillCurrent = () => demoFile === requestDemo && mediaFile === requestMedia;
 
 		try {
 			const [{ prepareInjectWav }, { injectCommsWasm, preloadInjectorWasm }] = await Promise.all([
@@ -386,23 +403,23 @@
 				meta.packets_truncated && meta.packets_truncated > 0
 					? `, truncated ${meta.packets_truncated} (audio longer than demo)`
 					: '';
-			form.successMessage = `Downloaded ${outName} (${meta.packets_injected} voice packets${trunc}, offset ${meta.offset_secs.toFixed(2)}s via ${meta.offset_source})`;
-			form.errorMessage = null;
+			successMessage = `Downloaded ${outName} (${meta.packets_injected} voice packets${trunc}, offset ${meta.offset_secs.toFixed(2)}s via ${meta.offset_source})`;
+			errorMessage = null;
 			// Let the bar paint at 100% briefly before generating clears.
 			await new Promise((r) => setTimeout(r, 280));
 		} catch (e) {
 			const isAbort = (e instanceof DOMException || e instanceof Error) && e.name === 'AbortError';
 			if (isAbort || !stillCurrent()) return;
-			form.successMessage = null;
+			successMessage = null;
 			if (e instanceof Error && e.message) {
-				form.errorMessage = e.message;
+				errorMessage = e.message;
 			} else if (typeof e === 'string' && e) {
-				form.errorMessage = e;
+				errorMessage = e;
 			} else {
 				try {
-					form.errorMessage = JSON.stringify(e) || 'Injection failed.';
+					errorMessage = JSON.stringify(e) || 'Injection failed.';
 				} catch {
-					form.errorMessage = String(e || 'Injection failed.');
+					errorMessage = String(e || 'Injection failed.');
 				}
 			}
 		} finally {
@@ -417,6 +434,8 @@
 		return info.kind === 'channels' ? 'Audio channels' : 'Audio tracks';
 	}
 </script>
+
+<svelte:window onbeforeunload={hasUpload ? onBeforeUnload : undefined} />
 
 <main
 	class="mx-auto flex min-h-dvh w-full max-w-xl flex-col px-4 py-10 transition-opacity duration-500
@@ -471,10 +490,10 @@
 					label="Demo file"
 					prominent
 					accept=".dem,application/octet-stream"
-					file={form.demoFile}
+					file={demoFile}
 					onchange={(f) => void setDemoFile(f)}
 				/>
-				{#if !form.demoFile}
+				{#if !demoFile}
 					<p class="text-xs leading-relaxed text-[var(--color-muted)]">
 						Get match demos from
 						<a
@@ -489,7 +508,7 @@
 					</p>
 				{/if}
 
-				{#if form.demoFile}
+				{#if demoFile}
 					<div
 						class="ml-1 flex flex-col gap-1.5 border-l border-[var(--color-border)] pl-4"
 						transition:slide={{ duration: 160 }}
@@ -501,21 +520,17 @@
 							<Hint text="Who the injected voice belongs to in this demo." />
 						</div>
 
-						{#if form.playersLoading}
+						{#if playersLoading}
 							<LoadingStatus label="Reading players…" />
-						{:else if form.playersError}
+						{:else if playersError}
 							<p
 								class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
 								role="alert"
 							>
-								{form.playersError}
+								{playersError}
 							</p>
-						{:else if form.players.length > 0}
-							<SpeakerSelect
-								id="speaker"
-								players={form.players}
-								bind:value={form.selectedPlayerId}
-							/>
+						{:else if players.length > 0}
+							<SpeakerSelect id="speaker" {players} bind:value={selectedPlayerId} />
 						{/if}
 					</div>
 				{/if}
@@ -527,10 +542,10 @@
 					label="Audio / video"
 					prominent
 					accept="video/mp4,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/flac,audio/x-m4a,.mp3,.wav,.ogg,.webm,.flac,.m4a,.mp4"
-					file={form.mediaFile}
+					file={mediaFile}
 					onchange={(f) => void setMediaFile(f)}
 				/>
-				{#if !form.mediaFile}
+				{#if !mediaFile}
 					<p class="text-xs leading-relaxed text-[var(--color-muted)]">
 						Full-match recordings work best, ideally with separate Discord/mic tracks.
 						<a
@@ -542,7 +557,7 @@
 					</p>
 				{/if}
 
-				{#if form.mediaFile}
+				{#if mediaFile}
 					<div
 						class="ml-1 flex flex-col gap-4 border-l border-[var(--color-border)] pl-4"
 						transition:slide={{ duration: 160 }}
@@ -561,7 +576,7 @@
 								placeholder="e.g. 5.0"
 								autocomplete="off"
 								inputmode="decimal"
-								value={form.gameStartDraft}
+								value={gameStartDraft}
 								oninput={onGameStartInput}
 								onblur={onGameStartBlur}
 								aria-invalid={showGameStartNeeded}
@@ -575,7 +590,7 @@
 									type="button"
 									class="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs tracking-wide text-[var(--color-fg)]
 										hover:border-[var(--color-border-strong)] disabled:cursor-not-allowed disabled:opacity-40"
-									disabled={!gameStartValid || !form.mediaFile}
+									disabled={!gameStartValid || !mediaFile}
 									onclick={() => (previewing ? stopPreview() : void onPreview())}
 								>
 									{previewing ? 'Stop preview' : 'Preview ±5s'}
@@ -592,36 +607,36 @@
 								class="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--color-muted)]"
 								id="tracks-label"
 							>
-								{form.mediaInfo ? sourceLegend(form.mediaInfo) : 'Tracks'}
-								{#if form.mediaInfo?.summary}
-									<Hint text={form.mediaInfo.summary} label="Track details" />
+								{mediaInfo ? sourceLegend(mediaInfo) : 'Tracks'}
+								{#if mediaInfo?.summary}
+									<Hint text={mediaInfo.summary} label="Track details" />
 								{/if}
 							</p>
 
-							{#if form.mediaLoading}
+							{#if mediaLoading}
 								<LoadingStatus label="Reading tracks…" />
-							{:else if form.mediaError}
+							{:else if mediaError}
 								<p
 									class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
 									role="alert"
 								>
-									{form.mediaError}
+									{mediaError}
 								</p>
-							{:else if form.mediaInfo && form.mediaInfo.sources.length > 0}
+							{:else if mediaInfo && mediaInfo.sources.length > 0}
 								<div
 									class="flex flex-col gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2"
 									role="group"
 									aria-labelledby="tracks-label"
 									transition:fade={{ duration: 180 }}
 								>
-									{#each form.mediaInfo.sources as source (source.id)}
+									{#each mediaInfo.sources as source (source.id)}
 										<div class="flex items-center gap-2 py-1">
 											<label
 												class="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-sm text-[var(--color-fg)]"
 											>
 												<input
 													type="checkbox"
-													checked={form.selectedSources.includes(source.id)}
+													checked={selectedSources.includes(source.id)}
 													onchange={() => toggleSource(source.id)}
 													class="rounded border-[var(--color-border-strong)] bg-[var(--color-surface-2)] text-[var(--color-accent)]
 														focus:ring-[var(--color-accent)]"
@@ -648,8 +663,8 @@
 										</div>
 									{/each}
 								</div>
-								{#if form.mediaInfo.selectionHint && form.selectedSources.length === 0}
-									<p class="text-xs text-[var(--color-muted)]">{form.mediaInfo.selectionHint}</p>
+								{#if mediaInfo.selectionHint && selectedSources.length === 0}
+									<p class="text-xs text-[var(--color-muted)]">{mediaInfo.selectionHint}</p>
 								{/if}
 							{/if}
 						</div>
@@ -675,17 +690,17 @@
 					<div class="mt-3" transition:fade={{ duration: 160 }}>
 						<ProgressBar value={generateProgress} label={generateStatus || 'Working…'} />
 					</div>
-				{:else if form.successMessage}
+				{:else if successMessage}
 					<p
 						class="mt-3 text-sm text-[var(--color-success)]"
 						role="status"
 						transition:fade={{ duration: 200 }}
 					>
-						{form.successMessage}
+						{successMessage}
 					</p>
 				{/if}
-				{#if form.errorMessage}
-					<p class="mt-3 text-sm text-red-300/90" role="alert">{form.errorMessage}</p>
+				{#if errorMessage}
+					<p class="mt-3 text-sm text-red-300/90" role="alert">{errorMessage}</p>
 				{/if}
 			</div>
 		</form>
