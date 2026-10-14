@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
+	import { beforeNavigate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { fade, slide } from 'svelte/transition';
 	import FileField from '$lib/components/FileField.svelte';
@@ -49,6 +50,8 @@
 	let gameStartPreviewGen = 0;
 	/** Cancels in-flight prepare when demo/media is swapped or Generate restarts. */
 	let generateAbort: AbortController | null = null;
+	/** False after leaving the injector so a leftover Generate cannot finish. */
+	let pageActive = true;
 
 	const selectedPlayer = $derived(
 		players.find((p) => String(p.userId) === selectedPlayerId) ?? null
@@ -79,14 +82,34 @@
 		event.returnValue = '';
 	}
 
+	function abandonInjectorWork() {
+		pageActive = false;
+		generateAbort?.abort();
+		generateAbort = null;
+		stopPreview();
+		stopSourcePreview();
+	}
+
+	beforeNavigate((navigation) => {
+		if (navigation.willUnload) return;
+		if (!hasUpload && !generating) return;
+		if (!confirm('Leave this page? Changes you made may not be saved.')) {
+			navigation.cancel();
+			return;
+		}
+		abandonInjectorWork();
+		void navigation.complete.catch(() => {
+			pageActive = true;
+		});
+	});
+
 	onMount(() => {
 		const id = requestAnimationFrame(() => {
 			ready = true;
 		});
 		return () => {
 			cancelAnimationFrame(id);
-			previewHandle?.stop();
-			sourcePreviewHandle?.stop();
+			abandonInjectorWork();
 		};
 	});
 
@@ -340,7 +363,7 @@
 		const requestStart = mediaGameStart;
 		const requestSources = [...selectedSources];
 		const sourcesSnapshot = mediaInfo?.sources ?? [];
-		const stillCurrent = () => demoFile === requestDemo && mediaFile === requestMedia;
+		const stillCurrent = () => pageActive && demoFile === requestDemo && mediaFile === requestMedia;
 
 		try {
 			const [{ prepareInjectWav }, { injectCommsWasm, preloadInjectorWasm }] = await Promise.all([
