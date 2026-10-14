@@ -71,6 +71,14 @@
 			!mediaLoading
 	);
 
+	const hasUpload = $derived(!!demoFile || !!mediaFile);
+
+	/** Soft-blocks tab close / refresh / leaving the site while files are selected. */
+	function onBeforeUnload(event: BeforeUnloadEvent) {
+		event.preventDefault();
+		event.returnValue = '';
+	}
+
 	onMount(() => {
 		const id = requestAnimationFrame(() => {
 			ready = true;
@@ -427,6 +435,8 @@
 	}
 </script>
 
+<svelte:window onbeforeunload={hasUpload ? onBeforeUnload : undefined} />
+
 <main
 	class="mx-auto flex min-h-dvh w-full max-w-xl flex-col px-4 py-10 transition-opacity duration-500
 		ease-out sm:px-6 sm:py-14
@@ -483,6 +493,20 @@
 					file={demoFile}
 					onchange={(f) => void setDemoFile(f)}
 				/>
+				{#if !demoFile}
+					<p class="text-xs leading-relaxed text-[var(--color-muted)]">
+						Get match demos from
+						<a
+							href="https://demos.tf"
+							target="_blank"
+							rel="noopener noreferrer"
+							class="rounded text-[var(--color-fg)] underline decoration-[var(--color-border-strong)] underline-offset-4 hover:text-[var(--color-fg-strong)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--color-accent)]"
+						>
+							demos.tf <span aria-hidden="true">↗</span>
+							<span class="sr-only">(opens in a new tab)</span>
+						</a>
+					</p>
+				{/if}
 
 				{#if demoFile}
 					<div
