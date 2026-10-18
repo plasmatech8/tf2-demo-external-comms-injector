@@ -92,6 +92,8 @@
 
 	beforeNavigate((navigation) => {
 		if (navigation.willUnload) return;
+		// Query-string navigation keeps this page mounted, so its work must stay active.
+		if (navigation.to?.route.id === navigation.from?.route.id) return;
 		if (!hasUpload && !generating) return;
 		if (!confirm('Leave this page? Changes you made may not be saved.')) {
 			navigation.cancel();
