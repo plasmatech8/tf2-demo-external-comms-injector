@@ -8,7 +8,11 @@
 
 	const canonicalUrl = $derived(`${page.url.origin}${page.url.pathname}`);
 	const ogImageUrl = $derived(`${page.url.origin}${OG_IMAGE_PATH}`);
-	const pageTitle = $derived(page.data.title ?? SITE_TITLE);
+	const pageTitle = $derived(
+		page.error && page.route.id === '/share/[id]'
+			? `${page.status === 410 ? 'Link expired' : 'Demo unavailable'} — TF2 Demo File`
+			: (page.data.title ?? SITE_TITLE)
+	);
 	const pageDescription = $derived(page.data.description ?? META_DESCRIPTION);
 </script>
 

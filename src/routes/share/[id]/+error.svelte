@@ -3,11 +3,6 @@
 	import { resolve } from '$app/paths';
 </script>
 
-<svelte:head
-	><title>{page.status === 410 ? 'Link expired' : 'Demo unavailable'} — TF2 Demo File</title
-	></svelte:head
->
-
 <main class="mx-auto flex min-h-dvh w-full max-w-md flex-col justify-center px-6 py-12">
 	<h1
 		class="font-[family-name:var(--font-display)] text-3xl font-semibold text-[var(--color-fg-strong)]"
