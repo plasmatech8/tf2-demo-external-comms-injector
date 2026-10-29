@@ -12,7 +12,13 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
-			adapter: adapter()
+			adapter: adapter({
+				platformProxy: {
+					// Match Wrangler preview's local R2 store; no cloud account is needed for dev.
+					persist: { path: '.wrangler/state/v3' },
+					remoteBindings: false
+				}
+			})
 		})
 	],
 	assetsInclude: ['**/*.wasm'],

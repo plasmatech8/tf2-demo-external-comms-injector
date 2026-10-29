@@ -1,0 +1,22 @@
+{
+	"rules": [
+		{
+			"id": "expire-shared-demos",
+			"enabled": true,
+			"conditions": { "prefix": "demos/" },
+			"deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 604800 } }
+		},
+		{
+			"id": "expire-upload-sessions",
+			"enabled": true,
+			"conditions": { "prefix": "uploads/" },
+			"deleteObjectsTransition": { "condition": { "type": "Age", "maxAge": 86400 } }
+		},
+		{
+			"id": "abort-unfinished-uploads",
+			"enabled": true,
+			"conditions": { "prefix": "demos/" },
+			"abortMultipartUploadsTransition": { "condition": { "type": "Age", "maxAge": 86400 } }
+		}
+	]
+}

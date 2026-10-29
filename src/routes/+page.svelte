@@ -5,13 +5,22 @@
 	import FileField from '$lib/components/FileField.svelte';
 	import Hint from '$lib/components/Hint.svelte';
 	import LoadingStatus from '$lib/components/LoadingStatus.svelte';
-	import ProgressBar from '$lib/components/ProgressBar.svelte';
+	import GenerationResult from '$lib/components/GenerationResult.svelte';
+	import { createDemoSharing } from '$lib/demo-sharing.svelte';
 	import SpeakerSelect from '$lib/components/SpeakerSelect.svelte';
+	import ShareDemos from '$lib/components/ShareDemos.svelte';
+	import type { GeneratedDemo } from '$lib/shares';
+	import type { PageData } from './$types';
 	import { listDemoPlayers, type DemoPlayer } from '$lib/demo/players';
 	import { previewAroundGameStart, type PreviewHandle } from '$lib/media/preview';
 	import { previewMediaSource, primeAudioContext } from '$lib/media/source-preview';
 	import { inspectMedia, type MediaInspection, type MediaSource } from '$lib/media/tracks';
 	import { SITE_DESCRIPTION } from '$lib/site';
+
+	let { data }: { data: PageData } = $props();
+	let generatedDemo = $state.raw<GeneratedDemo | null>(null);
+	const sharing = createDemoSharing();
+	onMount(sharing.mount);
 
 	let demoFile = $state<File | null>(null);
 	let mediaFile = $state<File | null>(null);
@@ -67,6 +76,7 @@
 			selectedSources.length > 0 &&
 			gameStartValid &&
 			!generating &&
+			!sharing.state.uploading &&
 			!playersLoading &&
 			!mediaLoading
 	);
@@ -382,6 +392,15 @@
 			setGenerateProgress('Downloading…', 95);
 
 			const blob = new Blob([demo.slice()], { type: 'application/octet-stream' });
+			generatedDemo = {
+				id: crypto.randomUUID(),
+				name: outName,
+				blob,
+				warning:
+					(meta.packets_truncated ?? 0) > 0
+						? 'Extra audio after the demo ended was left out.'
+						: undefined
+			};
 			const url = URL.createObjectURL(blob);
 			const a = document.createElement('a');
 			a.href = url;
@@ -427,258 +446,280 @@
 	}
 </script>
 
-<main
-	class="mx-auto flex min-h-dvh w-full max-w-xl flex-col px-4 py-10 transition-opacity duration-500
-		ease-out sm:px-6 sm:py-14
+<div class="flex h-dvh flex-col overflow-hidden">
+	<main
+		class="min-h-0 flex-1 overflow-y-auto overscroll-contain transition-opacity duration-500 ease-out
 		{ready ? 'opacity-100' : 'opacity-0'}"
->
-	<div class="flex-1">
-		<header class="mb-8 sm:mb-10">
-			<div class="flex items-start justify-between gap-4">
-				<h1
-					class="font-[family-name:var(--font-display)] text-[2.75rem] leading-[0.95] font-bold tracking-wide text-[var(--color-fg-strong)] uppercase sm:text-5xl"
-				>
-					TF2 Demo File
-				</h1>
-				<a
-					href="https://github.com/plasmatech8/tf2-demo-external-comms-injector"
-					target="_blank"
-					rel="noopener noreferrer"
-					aria-label="View source on GitHub"
-					class="mt-1 shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors
+	>
+		<div class="mx-auto w-full max-w-xl px-4 pt-10 pb-6 sm:px-6 sm:pt-14">
+			<header class="mb-8 sm:mb-10">
+				<div class="flex items-start justify-between gap-4">
+					<h1
+						class="font-[family-name:var(--font-display)] text-[2.75rem] leading-[0.95] font-bold tracking-wide text-[var(--color-fg-strong)] uppercase sm:text-5xl"
+					>
+						TF2 Demo File
+					</h1>
+					<a
+						href="https://github.com/plasmatech8/tf2-demo-external-comms-injector"
+						target="_blank"
+						rel="noopener noreferrer"
+						aria-label="View source on GitHub"
+						class="mt-1 shrink-0 rounded p-1.5 text-[var(--color-muted)] transition-colors
 						hover:text-[var(--color-fg-strong)] focus:outline-none focus-visible:ring-2
 						focus-visible:ring-[var(--color-accent)]"
-				>
-					<svg class="size-6" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-						<path
-							d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"
-						/>
-					</svg>
-				</a>
-			</div>
-			<p
-				class="mt-2 font-[family-name:var(--font-display)] text-lg font-medium tracking-wide text-[var(--color-muted)] uppercase sm:text-xl"
-			>
-				External Comms Audio Injection Tool
-			</p>
-			<p class="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">
-				{SITE_DESCRIPTION}
-			</p>
-		</header>
-
-		<form
-			class="flex flex-col gap-8"
-			autocomplete="off"
-			onsubmit={(e) => {
-				e.preventDefault();
-				void onGenerate();
-			}}
-		>
-			<div class="flex flex-col gap-3">
-				<FileField
-					id="demo-file"
-					label="Demo file"
-					prominent
-					accept=".dem,application/octet-stream"
-					file={demoFile}
-					onchange={(f) => void setDemoFile(f)}
-				/>
-
-				{#if demoFile}
-					<div
-						class="ml-1 flex flex-col gap-1.5 border-l border-[var(--color-border)] pl-4"
-						transition:slide={{ duration: 160 }}
 					>
-						<div class="inline-flex items-center gap-1.5">
-							<label for="speaker" class="text-sm font-medium text-[var(--color-muted)]">
-								Speaker
-							</label>
-							<Hint text="Who the injected voice belongs to in this demo." />
-						</div>
-
-						{#if playersLoading}
-							<LoadingStatus label="Reading players…" />
-						{:else if playersError}
-							<p
-								class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
-								role="alert"
-							>
-								{playersError}
-							</p>
-						{:else if players.length > 0}
-							<SpeakerSelect id="speaker" {players} bind:value={selectedPlayerId} />
-						{/if}
-					</div>
-				{/if}
-			</div>
-
-			<div class="flex flex-col gap-3">
-				<FileField
-					id="media-file"
-					label="Audio / video"
-					prominent
-					accept="video/mp4,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/flac,audio/x-m4a,.mp3,.wav,.ogg,.webm,.flac,.m4a,.mp4"
-					file={mediaFile}
-					onchange={(f) => void setMediaFile(f)}
-				/>
-				{#if !mediaFile}
-					<p class="text-xs leading-relaxed text-[var(--color-muted)]">
-						Full-match recordings work best, ideally with separate Discord/mic tracks.
-						<a
-							href={resolve('/recording-help')}
-							class="rounded text-[var(--color-fg)] underline decoration-[var(--color-border-strong)] underline-offset-4 hover:text-[var(--color-fg-strong)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--color-accent)]"
-						>
-							Recording help <span aria-hidden="true">→</span>
-						</a>
-					</p>
-				{/if}
-
-				{#if mediaFile}
-					<div
-						class="ml-1 flex flex-col gap-4 border-l border-[var(--color-border)] pl-4"
-						transition:slide={{ duration: 160 }}
-					>
-						<div class="flex flex-col gap-1.5">
-							<div class="inline-flex items-center gap-1.5">
-								<label for="media-game-start" class="text-sm font-medium text-[var(--color-muted)]">
-									Game start (seconds)
-								</label>
-								<Hint text="Enter how many seconds into the recording the first round starts." />
-							</div>
-							<input
-								id="media-game-start"
-								type="text"
-								required
-								placeholder="e.g. 5.0"
-								autocomplete="off"
-								inputmode="decimal"
-								value={gameStartDraft}
-								oninput={onGameStartInput}
-								onblur={onGameStartBlur}
-								aria-invalid={showGameStartNeeded}
-								class="w-full rounded border bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)] placeholder:text-[var(--color-muted)]
-									focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]
-									{showGameStartNeeded ? 'border-red-400/50' : 'border-[var(--color-border)]'}"
+						<svg class="size-6" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+							<path
+								d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"
 							/>
+						</svg>
+					</a>
+				</div>
+				<p
+					class="mt-2 font-[family-name:var(--font-display)] text-lg font-medium tracking-wide text-[var(--color-muted)] uppercase sm:text-xl"
+				>
+					External Comms Audio Injection Tool
+				</p>
+				<p class="mt-3 text-sm leading-relaxed text-[var(--color-muted)]">
+					{SITE_DESCRIPTION}
+				</p>
+			</header>
 
-							<div class="flex flex-wrap items-center gap-2 pt-0.5">
-								<button
-									type="button"
-									class="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs tracking-wide text-[var(--color-fg)]
-										hover:border-[var(--color-border-strong)] disabled:cursor-not-allowed disabled:opacity-40"
-									disabled={!gameStartValid || !mediaFile}
-									onclick={() => (previewing ? stopPreview() : void onPreview())}
-								>
-									{previewing ? 'Stop preview' : 'Preview ±5s'}
-								</button>
+			<form
+				class="flex flex-col gap-8"
+				autocomplete="off"
+				onsubmit={(e) => {
+					e.preventDefault();
+					void onGenerate();
+				}}
+			>
+				<div class="flex flex-col gap-3">
+					<FileField
+						id="demo-file"
+						label="Demo file"
+						prominent
+						accept=".dem,application/octet-stream"
+						file={demoFile}
+						onchange={(f) => void setDemoFile(f)}
+					/>
+
+					{#if demoFile}
+						<div
+							class="ml-1 flex flex-col gap-1.5 border-l border-[var(--color-border)] pl-4"
+							transition:slide={{ duration: 160 }}
+						>
+							<div class="inline-flex items-center gap-1.5">
+								<label for="speaker" class="text-sm font-medium text-[var(--color-muted)]">
+									Speaker
+								</label>
+								<Hint text="Who the injected voice belongs to in this demo." />
 							</div>
 
-							{#if showGameStartNeeded}
-								<p class="text-xs text-red-300/90" role="alert">Enter when the game starts.</p>
-							{/if}
-						</div>
-
-						<div class="flex flex-col gap-1.5">
-							<p
-								class="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--color-muted)]"
-								id="tracks-label"
-							>
-								{mediaInfo ? sourceLegend(mediaInfo) : 'Tracks'}
-								{#if mediaInfo?.summary}
-									<Hint text={mediaInfo.summary} label="Track details" />
-								{/if}
-							</p>
-
-							{#if mediaLoading}
-								<LoadingStatus label="Reading tracks…" />
-							{:else if mediaError}
+							{#if playersLoading}
+								<LoadingStatus label="Reading players…" />
+							{:else if playersError}
 								<p
 									class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
 									role="alert"
 								>
-									{mediaError}
+									{playersError}
 								</p>
-							{:else if mediaInfo && mediaInfo.sources.length > 0}
-								<div
-									class="flex flex-col gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2"
-									role="group"
-									aria-labelledby="tracks-label"
-									transition:fade={{ duration: 180 }}
-								>
-									{#each mediaInfo.sources as source (source.id)}
-										<div class="flex items-center gap-2 py-1">
-											<label
-												class="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-sm text-[var(--color-fg)]"
-											>
-												<input
-													type="checkbox"
-													checked={selectedSources.includes(source.id)}
-													onchange={() => toggleSource(source.id)}
-													class="rounded border-[var(--color-border-strong)] bg-[var(--color-surface-2)] text-[var(--color-accent)]
-														focus:ring-[var(--color-accent)]"
-												/>
-												<span class="truncate">{source.label}</span>
-											</label>
-											<button
-												type="button"
-												class="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[10px] tracking-wide text-[var(--color-muted)] uppercase
-													hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)] disabled:cursor-not-allowed disabled:opacity-40"
-												aria-label={sourcePreviewId === source.id
-													? `Stop preview of ${source.label}`
-													: `Preview ${source.label}`}
-												disabled={sourcePreviewLoadingId !== null &&
-													sourcePreviewLoadingId !== source.id}
-												onclick={() => void onSourcePreview(source)}
-											>
-												{sourcePreviewLoadingId === source.id
-													? '…'
-													: sourcePreviewId === source.id
-														? 'Stop'
-														: 'Play'}
-											</button>
-										</div>
-									{/each}
-								</div>
-								{#if mediaInfo.selectionHint && selectedSources.length === 0}
-									<p class="text-xs text-[var(--color-muted)]">{mediaInfo.selectionHint}</p>
-								{/if}
+							{:else if players.length > 0}
+								<SpeakerSelect id="speaker" {players} bind:value={selectedPlayerId} />
 							{/if}
 						</div>
-					</div>
-				{/if}
-			</div>
+					{/if}
+				</div>
 
-			<div>
-				<button
-					type="submit"
-					disabled={!canGenerate}
-					aria-busy={generating}
-					class="w-full rounded border border-transparent bg-[var(--color-accent)] px-4 py-3
+				<div class="flex flex-col gap-3">
+					<FileField
+						id="media-file"
+						label="Audio / video"
+						prominent
+						accept="video/mp4,audio/mpeg,audio/wav,audio/ogg,audio/webm,audio/flac,audio/x-m4a,.mp3,.wav,.ogg,.webm,.flac,.m4a,.mp4"
+						file={mediaFile}
+						onchange={(f) => void setMediaFile(f)}
+					/>
+					{#if !mediaFile}
+						<p class="text-xs leading-relaxed text-[var(--color-muted)]">
+							Full-match recordings work best, ideally with separate Discord/mic tracks.
+							<a
+								href={resolve('/recording-help')}
+								class="rounded text-[var(--color-fg)] underline decoration-[var(--color-border-strong)] underline-offset-4 hover:text-[var(--color-fg-strong)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--color-accent)]"
+							>
+								Recording help <span aria-hidden="true">→</span>
+							</a>
+						</p>
+					{/if}
+
+					{#if mediaFile}
+						<div
+							class="ml-1 flex flex-col gap-4 border-l border-[var(--color-border)] pl-4"
+							transition:slide={{ duration: 160 }}
+						>
+							<div class="flex flex-col gap-1.5">
+								<div class="inline-flex items-center gap-1.5">
+									<label
+										for="media-game-start"
+										class="text-sm font-medium text-[var(--color-muted)]"
+									>
+										Game start (seconds)
+									</label>
+									<Hint
+										text="Enter how many seconds into the recording the first round starts. Audio before this point is skipped."
+									/>
+								</div>
+								<input
+									id="media-game-start"
+									type="text"
+									required
+									placeholder="e.g. 5.0"
+									autocomplete="off"
+									inputmode="decimal"
+									value={gameStartDraft}
+									oninput={onGameStartInput}
+									onblur={onGameStartBlur}
+									aria-invalid={showGameStartNeeded}
+									class="w-full rounded border bg-[var(--color-surface-1)] text-sm text-[var(--color-fg)] placeholder:text-[var(--color-muted)]
+									focus:border-[var(--color-accent)] focus:ring-[var(--color-accent)]
+									{showGameStartNeeded ? 'border-red-400/50' : 'border-[var(--color-border)]'}"
+								/>
+
+								<div class="flex flex-wrap items-center gap-2 pt-0.5">
+									<button
+										type="button"
+										class="rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-1.5 text-xs tracking-wide text-[var(--color-fg)]
+										hover:border-[var(--color-border-strong)] disabled:cursor-not-allowed disabled:opacity-40"
+										disabled={!gameStartValid || !mediaFile}
+										onclick={() => (previewing ? stopPreview() : void onPreview())}
+									>
+										{previewing ? 'Stop preview' : 'Preview ±5s'}
+									</button>
+								</div>
+
+								{#if showGameStartNeeded}
+									<p class="text-xs text-red-300/90" role="alert">Enter when the game starts.</p>
+								{/if}
+							</div>
+
+							<div class="flex flex-col gap-1.5">
+								<p
+									class="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--color-muted)]"
+									id="tracks-label"
+								>
+									{mediaInfo ? sourceLegend(mediaInfo) : 'Tracks'}
+									{#if mediaInfo?.summary}
+										<Hint text={mediaInfo.summary} label="Track details" />
+									{/if}
+								</p>
+
+								{#if mediaLoading}
+									<LoadingStatus label="Reading tracks…" />
+								{:else if mediaError}
+									<p
+										class="rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-3 text-sm text-red-300/90"
+										role="alert"
+									>
+										{mediaError}
+									</p>
+								{:else if mediaInfo && mediaInfo.sources.length > 0}
+									<div
+										class="flex flex-col gap-1 rounded border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2"
+										role="group"
+										aria-labelledby="tracks-label"
+										transition:fade={{ duration: 180 }}
+									>
+										{#each mediaInfo.sources as source (source.id)}
+											<div class="flex items-center gap-2 py-1">
+												<label
+													class="flex min-w-0 flex-1 cursor-pointer items-center gap-2.5 text-sm text-[var(--color-fg)]"
+												>
+													<input
+														type="checkbox"
+														checked={selectedSources.includes(source.id)}
+														onchange={() => toggleSource(source.id)}
+														class="rounded border-[var(--color-border-strong)] bg-[var(--color-surface-2)] text-[var(--color-accent)]
+														focus:ring-[var(--color-accent)]"
+													/>
+													<span class="truncate">{source.label}</span>
+												</label>
+												<button
+													type="button"
+													class="shrink-0 rounded border border-[var(--color-border)] bg-[var(--color-surface-2)] px-2 py-1 text-[10px] tracking-wide text-[var(--color-muted)] uppercase
+													hover:border-[var(--color-border-strong)] hover:text-[var(--color-fg)] disabled:cursor-not-allowed disabled:opacity-40"
+													aria-label={sourcePreviewId === source.id
+														? `Stop preview of ${source.label}`
+														: `Preview ${source.label}`}
+													disabled={sourcePreviewLoadingId !== null &&
+														sourcePreviewLoadingId !== source.id}
+													onclick={() => void onSourcePreview(source)}
+												>
+													{sourcePreviewLoadingId === source.id
+														? '…'
+														: sourcePreviewId === source.id
+															? 'Stop'
+															: 'Play'}
+												</button>
+											</div>
+										{/each}
+									</div>
+									{#if mediaInfo.selectionHint && selectedSources.length === 0}
+										<p class="text-xs text-[var(--color-muted)]">{mediaInfo.selectionHint}</p>
+									{/if}
+								{/if}
+							</div>
+						</div>
+					{/if}
+				</div>
+
+				<div>
+					<button
+						type="submit"
+						disabled={!canGenerate}
+						aria-busy={generating}
+						class="w-full rounded border border-transparent bg-[var(--color-accent)] px-4 py-3
 						font-[family-name:var(--font-display)] text-lg font-semibold tracking-wider text-[var(--color-fg-strong)] uppercase
 						transition-[background-color,transform,opacity] duration-150
 						enabled:hover:bg-[var(--color-accent-hover)] enabled:active:scale-[0.98]
 						disabled:cursor-not-allowed disabled:opacity-40"
-				>
-					{generating ? 'Generating…' : 'Generate & download'}
-				</button>
-
-				{#if generating}
-					<div class="mt-3" transition:fade={{ duration: 160 }}>
-						<ProgressBar value={generateProgress} label={generateStatus || 'Working…'} />
-					</div>
-				{:else if successMessage}
-					<p
-						class="mt-3 text-sm text-[var(--color-success)]"
-						role="status"
-						transition:fade={{ duration: 200 }}
 					>
-						{successMessage}
-					</p>
-				{/if}
-				{#if errorMessage}
-					<p class="mt-3 text-sm text-red-300/90" role="alert">{errorMessage}</p>
-				{/if}
-			</div>
-		</form>
-	</div>
-</main>
+						{generating ? 'Generating…' : 'Generate & download'}
+					</button>
+
+					{#if generating || generatedDemo}
+						<GenerationResult
+							demo={generatedDemo}
+							{generating}
+							progress={generateProgress}
+							status={generateStatus}
+							summary={successMessage}
+							{sharing}
+							enabled={data.sharingEnabled}
+						/>
+					{/if}
+					{#if errorMessage}
+						<p class="mt-3 text-sm text-red-300/90" role="alert">{errorMessage}</p>
+					{/if}
+					{#if sharing.state.storageWarning}
+						<p class="mt-3 text-xs text-amber-200/80" role="status">
+							{sharing.state.storageWarning}
+						</p>
+					{/if}
+					{#if sharing.state.cleanupError}
+						<div class="mt-3 text-xs text-red-300/90" role="alert">
+							<p>{sharing.state.cleanupError}</p>
+							<button
+								type="button"
+								class="mt-2 underline disabled:opacity-50"
+								disabled={sharing.state.cleanupRetrying}
+								onclick={() => void sharing.retryCleanup()}
+								>{sharing.state.cleanupRetrying ? 'Retrying…' : 'Retry cancellation'}</button
+							>
+						</div>
+					{/if}
+				</div>
+			</form>
+		</div>
+	</main>
+	<ShareDemos {sharing} />
+</div>
