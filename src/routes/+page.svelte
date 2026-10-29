@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
+	import { beforeNavigate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { fade, slide } from 'svelte/transition';
 	import FileField from '$lib/components/FileField.svelte';
@@ -58,6 +59,8 @@
 	let gameStartPreviewGen = 0;
 	/** Cancels in-flight prepare when demo/media is swapped or Generate restarts. */
 	let generateAbort: AbortController | null = null;
+	/** False after leaving the injector so a leftover Generate cannot finish. */
+	let pageActive = true;
 
 	const selectedPlayer = $derived(
 		players.find((p) => String(p.userId) === selectedPlayerId) ?? null
@@ -81,14 +84,44 @@
 			!mediaLoading
 	);
 
+	const hasUpload = $derived(!!demoFile || !!mediaFile);
+
+	/** Soft-blocks tab close / refresh / leaving the site while files are selected. */
+	function onBeforeUnload(event: BeforeUnloadEvent) {
+		event.preventDefault();
+		event.returnValue = '';
+	}
+
+	function abandonInjectorWork() {
+		pageActive = false;
+		generateAbort?.abort();
+		generateAbort = null;
+		stopPreview();
+		stopSourcePreview();
+	}
+
+	beforeNavigate((navigation) => {
+		if (navigation.willUnload) return;
+		// Query-string navigation keeps this page mounted, so its work must stay active.
+		if (navigation.to?.route.id === navigation.from?.route.id) return;
+		if (!hasUpload && !generating) return;
+		if (!confirm('Leave this page? Changes you made may not be saved.')) {
+			navigation.cancel();
+			return;
+		}
+		abandonInjectorWork();
+		void navigation.complete.catch(() => {
+			pageActive = true;
+		});
+	});
+
 	onMount(() => {
 		const id = requestAnimationFrame(() => {
 			ready = true;
 		});
 		return () => {
 			cancelAnimationFrame(id);
-			previewHandle?.stop();
-			sourcePreviewHandle?.stop();
+			abandonInjectorWork();
 		};
 	});
 
@@ -342,7 +375,7 @@
 		const requestStart = mediaGameStart;
 		const requestSources = [...selectedSources];
 		const sourcesSnapshot = mediaInfo?.sources ?? [];
-		const stillCurrent = () => demoFile === requestDemo && mediaFile === requestMedia;
+		const stillCurrent = () => pageActive && demoFile === requestDemo && mediaFile === requestMedia;
 
 		try {
 			const [{ prepareInjectWav }, { injectCommsWasm, preloadInjectorWasm }] = await Promise.all([
@@ -446,6 +479,8 @@
 	}
 </script>
 
+<svelte:window onbeforeunload={hasUpload ? onBeforeUnload : undefined} />
+
 <div class="flex h-dvh flex-col overflow-hidden">
 	<main
 		class="min-h-0 flex-1 overflow-y-auto overscroll-contain transition-opacity duration-500 ease-out
@@ -502,6 +537,20 @@
 						file={demoFile}
 						onchange={(f) => void setDemoFile(f)}
 					/>
+					{#if !demoFile}
+						<p class="text-xs leading-relaxed text-[var(--color-muted)]">
+							Get match demos from
+							<a
+								href="https://demos.tf"
+								target="_blank"
+								rel="noopener noreferrer"
+								class="rounded text-[var(--color-fg)] underline decoration-[var(--color-border-strong)] underline-offset-4 hover:text-[var(--color-fg-strong)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[var(--color-accent)]"
+							>
+								demos.tf <span aria-hidden="true">↗</span>
+								<span class="sr-only">(opens in a new tab)</span>
+							</a>
+						</p>
+					{/if}
 
 					{#if demoFile}
 						<div

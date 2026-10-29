@@ -49,7 +49,7 @@ before(async () => {
 					}));
 					builder.onLoad({ filter: /.*/, namespace: 'app-fixture' }, () => ({
 						contents:
-							'export const dev = true; export const resolve = (route, params = {}) => route.replace(/\\[([^\\]]+)\\]/g, (_, key) => params[key]);',
+							'export const beforeNavigate = () => {}; export const dev = true; export const resolve = (route, params = {}) => route.replace(/\\[([^\\]]+)\\]/g, (_, key) => params[key]);',
 						loader: 'js'
 					}));
 					// Supply the controller to the real page without running browser onMount in SSR.
