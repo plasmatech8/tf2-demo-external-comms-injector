@@ -139,6 +139,27 @@ test('multipart R2 roundtrip preserves bytes, filename, expiry, and retry identi
 	await assert.rejects(server.getUpload(bucket, token), { status: 404 });
 });
 
+test('first completion returns the demo filename when R2 omits custom metadata', async () => {
+	const name = 'night-match_with_comms.dem';
+	const bytes = new TextEncoder().encode('HL2DEMO\0filename');
+	const { token } = await server.startShare(bucket, { name, size: bytes.length });
+	const session = await server.getUpload(bucket, token);
+	const upload = bucket.resumeMultipartUpload(server.demoKey(session.id), session.uploadId);
+	const part = await upload.uploadPart(1, bytes);
+	const completionBucket = {
+		head: (key) => bucket.head(key),
+		resumeMultipartUpload: () => ({
+			async complete(parts) {
+				const { key, size, uploaded } = await upload.complete(parts);
+				return { key, size, uploaded };
+			}
+		})
+	};
+	const share = await server.completeShare(completionBucket, session, { parts: [part] });
+	assert.equal(share.name, name);
+	assert.deepEqual(await server.getSharedDemoInfo(bucket, share.id), share);
+});
+
 test('explicit cancel deletes a demo that finished before the response was aborted', async () => {
 	const bytes = new TextEncoder().encode('HL2DEMO\0cancel');
 	const { share, token } = await uploadBytes(bytes, 'cancel.dem');

@@ -256,7 +256,8 @@ export async function completeShare(
 		await bucket.delete(demoKey(session.id));
 		error(409, 'Upload cancelled.');
 	}
-	return savedShare(object);
+	// R2 can omit custom metadata from the multipart completion response.
+	return { ...savedShare(object), name: session.name };
 }
 
 function deletionKey(token: string, usage: KeyUsage[]) {
