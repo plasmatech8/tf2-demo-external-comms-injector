@@ -444,9 +444,9 @@ test('saved history tolerates invalid entries, deduplicates, and preserves expir
 	assert.equal(contracts.shareIsExpired(share, Date.parse(share.expiresAt) - 1), false);
 });
 
-test('200 MB upload limit and seven-day expiry agree with bucket cleanup', async () => {
+test('200 MB upload limit and 14-day expiry agree with bucket cleanup', async () => {
 	assert.equal(contracts.MAX_SHARE_SIZE, 200 * 1024 * 1024);
-	assert.equal(contracts.SHARE_LIFETIME_MS, 7 * 86400000);
+	assert.equal(contracts.SHARE_LIFETIME_MS, 14 * 86_400_000);
 	const { token } = await server.startShare(bucket, {
 		name: 'limit.dem',
 		size: contracts.MAX_SHARE_SIZE
@@ -480,11 +480,11 @@ test('history preserves deletion keys and shortens legacy expiry without losing 
 		name: 'legacy.dem',
 		size: 300 * 1024 * 1024,
 		createdAt: '2026-10-01T00:00:00.000Z',
-		expiresAt: '2026-10-15T00:00:00.000Z'
+		expiresAt: '2026-10-31T00:00:00.000Z'
 	};
 	const deleteToken = crypto.randomUUID();
 	const [restored] = contracts.readSavedShares(JSON.stringify([{ ...old, deleteToken }]));
-	assert.equal(restored.expiresAt, '2026-10-08T00:00:00.000Z');
+	assert.equal(restored.expiresAt, '2026-10-15T00:00:00.000Z');
 	assert.equal(restored.deleteToken, deleteToken);
 	assert.equal(restored.size, old.size);
 	const [invalid] = contracts.readSavedShares(JSON.stringify([{ ...old, deleteToken: 'invalid' }]));

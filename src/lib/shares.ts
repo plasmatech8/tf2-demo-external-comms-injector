@@ -1,4 +1,4 @@
-export const SHARE_LIFETIME_DAYS = 7;
+export const SHARE_LIFETIME_DAYS = 14;
 export const SHARE_LIFETIME_MS = SHARE_LIFETIME_DAYS * 24 * 60 * 60 * 1000;
 export const SHARE_PART_SIZE = 16 * 1024 * 1024;
 export const MAX_SHARE_SIZE = 200 * 1024 * 1024;

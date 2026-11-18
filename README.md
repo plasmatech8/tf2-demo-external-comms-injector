@@ -23,7 +23,7 @@ Injects an external audio recording into a SourceTV demo as in-game voice chat, 
 - Pick the speaker from players already in the demo
 - Align to game start with a simple “seconds into the recording” field
 - Auto-place on the demo timeline at `teamplay_round_start`
-- Optional share links that expire after 7 days, with link history saved in this browser
+- Optional share links that expire after 14 days, with link history saved in this browser
 - Offline CLI for the same engine (inspect / inject / extract)
 
 **Use cases:**
@@ -58,7 +58,7 @@ npm install
 npm run dev
 ```
 
-The full generate → download → save share link → download from the link workflow works at `http://localhost:5173/`. Development uses a persistent R2 emulator in `.wrangler/state/v3`; it needs no Cloudflare account or bucket setup and never uploads to cloud storage. Use the same hostname and port when testing saved-link history, because local storage belongs to that origin. Local links work on this computer while the server runs. Server-side 7-day expiry is enforced locally too; bucket lifecycle cleanup is configured separately for production.
+The full generate → download → save share link → download from the link workflow works at `http://localhost:5173/`. Development uses a persistent R2 emulator in `.wrangler/state/v3`; it needs no Cloudflare account or bucket setup and never uploads to cloud storage. Use the same hostname and port when testing saved-link history, because local storage belongs to that origin. Local links work on this computer while the server runs. Server-side 14-day expiry is enforced locally too; bucket lifecycle cleanup is configured separately for production.
 
 The progress box stays below **Generate & download** after completion, showing **Downloaded** and **Create Share Link**. Creating a link uploads the file already in memory. A **Share Links** footer appears once links exist and expands to the saved-link list. Copying and removing links happens in that list. The form scrolls above the footer, so an expanded list never covers the generation button.
 
@@ -85,7 +85,7 @@ After this initial setup, your normal CI build and `wrangler deploy` reuse the b
 
 Wrangler also supports [automatic resource provisioning](https://developers.cloudflare.com/workers/wrangler/configuration/#automatic-provisioning) when an R2 binding omits its bucket name. This project deliberately names the bucket so storage is explicit. Bucket creation and lifecycle configuration can be automated separately through Wrangler, the Cloudflare API or infrastructure tooling; no per-deployment manual dashboard edits are needed.
 
-Share links open a minimal page with the filename, size, remaining lifetime and a **Download demo** button. Opening the page reads object metadata only. The button streams the `.dem` from `/share/<id>/download`; expired or missing links show a friendly unavailable page. The Worker checks expiry on every download and sends `no-store` headers. The R2 lifecycle policy removes demos after 7 days, session records after one day, and unfinished multipart uploads after one day. Physical cleanup can lag expiry; the Worker still denies expired downloads immediately. See [Cloudflare's object lifecycle documentation](https://developers.cloudflare.com/r2/buckets/object-lifecycles/).
+Share links open a minimal page with the filename, size, remaining lifetime and a **Download demo** button. Opening the page reads object metadata only. The button streams the `.dem` from `/share/<id>/download`; expired or missing links show a friendly unavailable page. The Worker checks expiry on every download and sends `no-store` headers. The R2 lifecycle policy removes demos after 14 days, session records after one day, and unfinished multipart uploads after one day. Physical cleanup can lag expiry; the Worker still denies expired downloads immediately. See [Cloudflare's object lifecycle documentation](https://developers.cloudflare.com/r2/buckets/object-lifecycles/).
 
 Uploads use 16 MiB parts and support demos up to 200 MiB (shown as 200 MB in the UI). Part uploads and completion retry transient failures. Session creation makes a single attempt because it allocates new resources on every call; a lost creation response must not automatically create additional sessions. A session whose creation response was lost contains no demo bytes and is removed by the one-day cleanup policy. Creation is limited to five attempts per minute per IP using a Workers rate-limit binding. This is a basic limit, not authentication. The initial upload response gives the browser an owner key; uploading parts, completing, and cancelling require that key in an Authorization header. A session ID in a URL grants no authority by itself. New session records store a verification proof rather than the owner key. Someone with a public share link cannot replace or delete the demo. A private R2 bucket is essential to these access rules.
 
